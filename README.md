@@ -1,6 +1,6 @@
-# Inventory System - Setup Instructions
+-# Inventory System - Setup Instructions
 
-A PHP-based Inventory Management System with user authentication and PostgreSQL support. 
+A PHP-based Inventory Management System with user authentication and PostgreSQL support.
 
 ## File Structure
 

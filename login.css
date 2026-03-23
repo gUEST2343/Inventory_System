@@ -17,6 +17,9 @@
     --error-bg: #fef2f2;
     --error-text: #dc2626;
     --error-border: #fecaca;
+    --success-bg: #ecfdf3;
+    --success-text: #047857;
+    --success-border: #a7f3d0;
     --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
     --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
@@ -161,6 +164,25 @@ body::before {
 
 .error-message::before {
     content: '⚠';
+    font-size: 1rem;
+}
+
+/* Success Message */
+.success-message {
+    background: var(--success-bg);
+    border: 1px solid var(--success-border);
+    color: var(--success-text);
+    padding: 0.75rem 1rem;
+    border-radius: var(--radius-md);
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.success-message::before {
+    content: 'âœ“';
     font-size: 1rem;
 }
 

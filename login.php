@@ -12,30 +12,54 @@ session_start();
 // Include database connection
 require_once 'db_connect.php';
 
-// Check if user is already logged in, redirect to dashboard
+// Check if database connection failed
+$db_error = '';
+if (isset($db_connection_failed) && $db_connection_failed) {
+    $db_error = $db_connection_error ?: 'Database connection is currently unavailable. Please try again later.';
+}
+
+// Check if user is already logged in, redirect to the correct area
 if (isset($_SESSION['user_id']) && isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true) {
-    header('Location: dashboard.php');
+    $redirect = in_array($_SESSION['role'] ?? '', ['admin', 'manager'], true)
+        ? 'admin.php'
+        : 'customer_dashboard.php';
+    header('Location: ' . $redirect);
     exit;
 }
 
 // Initialize error message
 $error = '';
+$success = $_SESSION['flash_success'] ?? '';
+unset($_SESSION['flash_success']);
 
 // Process login form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     // Get and sanitize input
-    $username = trim($_POST['username'] ?? '');
+    $login = trim($_POST['login'] ?? ($_POST['username'] ?? ''));
     $password = $_POST['password'] ?? '';
     
     // Validate input
-    if (empty($username) || empty($password)) {
-        $error = 'Please enter both username and password.';
+    if (empty($login) || empty($password)) {
+        $error = 'Please enter both your email or username and password.';
+    } elseif ($pdo === null) {
+        // Database connection is not available
+        $error = 'Database connection is unavailable. Please try again later.';
     } else {
         try {
             // Prepare SQL statement to prevent SQL injection
-            $stmt = $pdo->prepare("SELECT id, username, password, email, full_name, role FROM users WHERE username = :username AND is_active = 1");
-            $stmt->execute(['username' => $username]);
+            $stmt = $pdo->prepare("
+                SELECT id, username, password, email, full_name, role
+                FROM users
+                WHERE (LOWER(username) = LOWER(:login) OR LOWER(email) = LOWER(:email))
+                  AND is_active = :is_active
+                LIMIT 1
+            ");
+            $stmt->execute([
+                'login' => $login,
+                'email' => $login,
+                'is_active' => true,
+            ]);
             $user = $stmt->fetch();
             
             // Verify password
@@ -57,16 +81,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $updateStmt = $pdo->prepare("UPDATE users SET updated_at = NOW() WHERE id = :id");
                 $updateStmt->execute(['id' => $user['id']]);
                 
-                // Redirect to dashboard
-                header('Location: dashboard.php');
+                // Redirect based on user role
+                $user_role = $user['role'];
+                if ($user_role === 'admin' || $user_role === 'manager') {
+                    // Admin/Manager goes to the admin dashboard
+                    header('Location: admin.php');
+                } else {
+                    // Regular users go to customer dashboard
+                    header('Location: customer_dashboard.php');
+                }
                 exit;
                 
             } else {
                 // Invalid credentials
-                $error = 'Invalid username or password.';
+                $error = 'Invalid email, username, or password.';
                 
                 // Log failed login attempt (optional)
-                error_log("Failed login attempt for username: " . $username);
+                error_log("Failed login attempt for login: " . $login);
             }
             
         } catch (PDOException $e) {
@@ -107,24 +138,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <?php echo htmlspecialchars($error); ?>
                 </div>
             <?php endif; ?>
+
+            <?php if (!empty($db_error)): ?>
+                <div class="error-message">
+                    <?php echo htmlspecialchars($db_error); ?>
+                </div>
+            <?php endif; ?>
+
+            <?php if (!empty($success)): ?>
+                <div class="error-message" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.28); color: #d3f6e4;">
+                    <?php echo htmlspecialchars($success); ?>
+                </div>
+            <?php endif; ?>
             
             <form method="POST" action="login.php" class="login-form">
                 <div class="form-group">
-                    <label for="username">
+                    <label for="login">
                         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
                             <circle cx="12" cy="7" r="4"></circle>
                         </svg>
-                        Username
+                        Email or Username
                     </label>
                     <input 
                         type="text" 
-                        id="username" 
-                        name="username" 
-                        placeholder="Enter your username"
+                        id="login" 
+                        name="login" 
+                        placeholder="Enter your email or username"
                         required
                         autocomplete="username"
-                        value="<?php echo isset($_POST['username']) ? htmlspecialchars($_POST['username']) : ''; ?>"
+                        value="<?php echo isset($_POST['login']) ? htmlspecialchars($_POST['login']) : (isset($_POST['username']) ? htmlspecialchars($_POST['username']) : ''); ?>"
                     >
                 </div>
                 
@@ -164,6 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </form>
             
             <div class="login-footer">
+                <p><a href="register.php" style="color: inherit;">Create an account</a> if you are new here.</p>
                 <p>&copy; <?php echo date('Y'); ?> Inventory System. All rights reserved.</p>
             </div>
         </div>

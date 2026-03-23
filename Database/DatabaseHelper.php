@@ -43,19 +43,20 @@ class DatabaseHelper
         
         if (file_exists($configFile)) {
             $config = require $configFile;
-            $connection = $config['connections'][$config['default']] ?? $config['connections']['mysql'];
+            $connection = $config['connections'][$config['default']] ?? $config['connections']['pgsql'];
             return $connection;
         }
         
         // Fallback to environment variables
         return [
-            'driver' => $_ENV['DB_CONNECTION'] ?? 'mysql',
+            'driver' => $_ENV['DB_CONNECTION'] ?? 'pgsql',
             'host' => $_ENV['DB_HOST'] ?? 'localhost',
-            'port' => $_ENV['DB_PORT'] ?? 3306,
+            'port' => $_ENV['DB_PORT'] ?? 5432,
             'database' => $_ENV['DB_DATABASE'] ?? 'inventory_db',
-            'username' => $_ENV['DB_USERNAME'] ?? 'root',
-            'password' => $_ENV['DB_PASSWORD'] ?? '',
-            'charset' => $_ENV['DB_CHARSET'] ?? 'utf8mb4',
+            'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
+            'password' => $_ENV['DB_PASSWORD'] ?? 'postgres',
+            'charset' => $_ENV['DB_CHARSET'] ?? 'utf8',
+            'schema' => $_ENV['DB_SCHEMA'] ?? 'public',
             'options' => [
                 \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
                 \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
@@ -122,27 +123,53 @@ class DatabaseHelper
     {
         $config = self::getDatabaseConfig();
         
-        if ($config['driver'] !== 'mysql') {
-            return; // Only works for MySQL
+        if ($config['driver'] !== 'pgsql') {
+            // For MySQL, use the original method
+            if ($config['driver'] === 'mysql') {
+                $dsn = sprintf(
+                    'mysql:host=%s;port=%s;charset=%s',
+                    $config['host'],
+                    $config['port'],
+                    $config['charset']
+                );
+                
+                try {
+                    $pdo = new \PDO($dsn, $config['username'], $config['password']);
+                    $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$config['database']}` 
+                               CHARACTER SET {$config['charset']} 
+                               COLLATE {$config['charset']}_unicode_ci");
+                    
+                    echo "Database '{$config['database']}' created or already exists.\n";
+                } catch (\PDOException $e) {
+                    throw new \RuntimeException('Failed to create database: ' . $e->getMessage());
+                }
+            }
+            return;
         }
         
-        // Connect without database name
+        // PostgreSQL: Connect to default 'postgres' database to create the target database
         $dsn = sprintf(
-            'mysql:host=%s;port=%s;charset=%s',
+            'pgsql:host=%s;port=%s;dbname=postgres',
             $config['host'],
-            $config['port'],
-            $config['charset']
+            $config['port']
         );
         
         try {
             $pdo = new \PDO($dsn, $config['username'], $config['password']);
-            $pdo->exec("CREATE DATABASE IF NOT EXISTS `{$config['database']}` 
-                       CHARACTER SET {$config['charset']} 
-                       COLLATE {$config['charset']}_unicode_ci");
             
-            echo "Database '{$config['database']}' created or already exists.\n";
+            // Check if database exists
+            $stmt = $pdo->query("SELECT 1 FROM pg_database WHERE datname = '{$config['database']}'");
+            $exists = $stmt->fetch();
+            
+            if (!$exists) {
+                $pdo->exec("CREATE DATABASE {$config['database']} ENCODING 'UTF8'");
+                echo "Database '{$config['database']}' created successfully.\n";
+            } else {
+                echo "Database '{$config['database']}' already exists.\n";
+            }
         } catch (\PDOException $e) {
             throw new \RuntimeException('Failed to create database: ' . $e->getMessage());
         }
     }
 }
+?>

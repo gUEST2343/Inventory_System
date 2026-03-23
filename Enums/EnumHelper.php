@@ -139,7 +139,7 @@ class EnumHelper
      * @param mixed $value The value to convert
      * @return mixed The enum value or null if invalid
      */
-    public static function tryFrom(string $enumClass, mixed $value): ?mixed
+    public static function tryFrom(string $enumClass, mixed $value): mixed
     {
         // If the enum class has a tryFrom method, use it
         if (method_exists($enumClass, 'tryFrom')) {

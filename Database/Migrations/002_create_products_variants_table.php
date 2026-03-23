@@ -1,15 +1,15 @@
 <?php
-// Manual table creation with PDO
+// Manual table creation with PDO for PostgreSQL
 $sql = "
     CREATE TABLE IF NOT EXISTS product_adjustments (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        id SERIAL PRIMARY KEY,
         product_id INT NOT NULL,
         user_id INT NOT NULL,
         quantity INT NOT NULL,
         action VARCHAR(20) NOT NULL,
         reason VARCHAR(200),
         adjustment_date DATE NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
 ";
 

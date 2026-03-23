@@ -6,31 +6,31 @@ class CreateProductsTable
     {
         return "
             CREATE TABLE products (
-                id INT PRIMARY KEY AUTO_INCREMENT,
+                id SERIAL PRIMARY KEY,
                 sku VARCHAR(12) UNIQUE NOT NULL,
                 name VARCHAR(100) NOT NULL,
                 brand VARCHAR(50) NOT NULL,
-                type ENUM('shoe', 'clothing') NOT NULL,
+                type VARCHAR(20) NOT NULL CHECK (type IN ('shoe', 'clothing')),
                 
                 -- Common attributes
                 price DECIMAL(10,2) NOT NULL CHECK (price >= 0),
                 safety_stock INT NOT NULL DEFAULT 0 CHECK (safety_stock >= 0),
                 
                 -- Shoe specific
-                shoe_type ENUM('running', 'casual', 'formal', 'boot', 'sandal', 'slipper') NULL,
-                size_eu INT NULL CHECK (size_eu BETWEEN 35 AND 48),
-                material VARCHAR(50) NULL,
+                shoe_type VARCHAR(20) CHECK (shoe_type IN ('running', 'casual', 'formal', 'boot', 'sandal', 'slipper')),
+                size_eu INT CHECK (size_eu BETWEEN 35 AND 48),
+                material VARCHAR(50),
                 
                 -- Clothing specific
-                clothing_type ENUM('shirt', 'pants', 'jacket', 'dress', 'skirt', 'sweater') NULL,
-                size_category ENUM('XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL') NULL,
-                fabric_type VARCHAR(50) NULL,
-                fit_code VARCHAR(3) NULL,
+                clothing_type VARCHAR(20) CHECK (clothing_type IN ('shirt', 'pants', 'jacket', 'dress', 'skirt', 'sweater')),
+                size_category VARCHAR(5) CHECK (size_category IN ('XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL')),
+                fabric_type VARCHAR(50),
+                fit_code VARCHAR(3) CHECK (fit_code IN ('REG', 'SLM', 'OVS', 'TAP')),
                 
                 -- Audit columns
                 version INT NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 
                 -- Check constraints for data integrity
                 CONSTRAINT chk_product_type CHECK (
@@ -47,9 +47,6 @@ class CreateProductsTable
                 ),
                 CONSTRAINT chk_safety_stock CHECK (
                     safety_stock <= 1000
-                ),
-                CONSTRAINT chk_fit_code CHECK (
-                    fit_code IS NULL OR fit_code IN ('REG', 'SLM', 'OVS', 'TAP')
                 )
             );
             
@@ -59,6 +56,20 @@ class CreateProductsTable
             CREATE INDEX idx_products_brand ON products(brand);
             CREATE INDEX idx_products_price ON products(price);
             CREATE INDEX idx_products_created ON products(created_at);
+            
+            -- Create trigger for updated_at
+            CREATE OR REPLACE FUNCTION update_updated_at_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = CURRENT_TIMESTAMP;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+            
+            CREATE TRIGGER update_products_updated_at
+                BEFORE UPDATE ON products
+                FOR EACH ROW
+                EXECUTE FUNCTION update_updated_at_column();
         ";
     }
     

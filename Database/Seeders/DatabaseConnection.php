@@ -16,10 +16,11 @@ class DatabaseConnection
                 $config = self::loadConfig();
                 
                 $dsn = sprintf(
-                    'mysql:host=%s;dbname=%s;charset=%s',
+                    'pgsql:host=%s;port=%s;dbname=%s;options=\'--client_encoding=%s\'',
                     $config['host'],
+                    $config['port'],
                     $config['database'],
-                    $config['charset']
+                    $config['charset'] ?? 'UTF8'
                 );
                 
                 self::$instance = new PDO(
@@ -34,8 +35,8 @@ class DatabaseConnection
                     ]
                 );
                 
-                // Set timezone
-                self::$instance->exec("SET time_zone = '" . $config['timezone'] . "'");
+                // Set schema to public
+                self::$instance->exec("SET search_path TO " . ($config['schema'] ?? 'public'));
                 
             } catch (PDOException $e) {
                 throw new \RuntimeException('Database connection failed: ' . $e->getMessage());
@@ -51,17 +52,20 @@ class DatabaseConnection
         $configFile = __DIR__ . '/../../config/database.php';
         
         if (file_exists($configFile)) {
-            return require $configFile;
+            $config = require $configFile;
+            $connection = $config['connections'][$config['default']] ?? $config['connections']['pgsql'];
+            return $connection;
         }
         
         // Fallback to environment variables
         return [
             'host' => $_ENV['DB_HOST'] ?? 'localhost',
+            'port' => $_ENV['DB_PORT'] ?? '5432',
             'database' => $_ENV['DB_DATABASE'] ?? 'inventory_db',
-            'username' => $_ENV['DB_USERNAME'] ?? 'root',
-            'password' => $_ENV['DB_PASSWORD'] ?? '',
-            'charset' => $_ENV['DB_CHARSET'] ?? 'utf8mb4',
-            'timezone' => $_ENV['DB_TIMEZONE'] ?? '+00:00',
+            'username' => $_ENV['DB_USERNAME'] ?? 'postgres',
+            'password' => $_ENV['DB_PASSWORD'] ?? 'Root',
+            'charset' => $_ENV['DB_CHARSET'] ?? 'utf8',
+            'schema' => $_ENV['DB_SCHEMA'] ?? 'public',
         ];
     }
     
@@ -70,3 +74,4 @@ class DatabaseConnection
         self::$instance = null;
     }
 }
+?>

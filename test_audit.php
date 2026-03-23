@@ -8,6 +8,8 @@ require_once 'src/Models/StockAdjustment.php';
 require_once 'src/Models/Shoe.php';
 require_once 'Enums/AdjustmentReason.php';
 require_once 'Enums/Color.php';
+require_once 'Enums/ShoeType.php';
+require_once 'Enums/SizeCategory.php';
 require_once 'Repositories/StockAdjustmentRepository.php';
 require_once 'Services/AuditService.php';
 
@@ -41,6 +43,27 @@ class MockStmt extends PDOStatement {
     }
 }
 
+class MockVariant extends App\Models\ProductVariant {
+    private int $mockId;
+    private string $mockBarcode;
+
+    public function __construct(int $id, string $barcode)
+    {
+        $this->mockId = $id;
+        $this->mockBarcode = $barcode;
+    }
+
+    public function getId(): int
+    {
+        return $this->mockId;
+    }
+
+    public function getBarcode(): string
+    {
+        return $this->mockBarcode;
+    }
+}
+
 // Test basic instantiation
 try {
     $pdo = new MockPDO();
@@ -50,8 +73,7 @@ try {
     echo "AuditService instantiated successfully.\n";
 
     // Test logStockAdjustment
-    $shoe = new App\Models\Shoe('TSKU', 'Test Shoe', 'Test Brand', 100.0, App\Enums\ShoeType::RUNNING, App\Enums\SizeCategory::SIZE_42, 'Leather');
-    $variant = new App\Models\ProductVariant($shoe, '123456789012', App\Enums\Color::BLACK, 50);
+    $variant = new MockVariant(1, '123456789012');
     $adjustment = $auditService->logStockAdjustment($variant, 50, 60, 10, 'received', 'Test adjustment');
 
     echo "logStockAdjustment executed successfully.\n";

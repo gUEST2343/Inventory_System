@@ -2,53 +2,69 @@
 /**
  * Get environment variable with fallback
  */
-function env($key, $default = null)
-{
-    $value = $_ENV[$key] ?? $_SERVER[$key] ?? getenv($key);
-    
-    if ($value === false || $value === null) {
-        return $default;
+if (!function_exists('env')) {
+    function env($key, $default = null)
+    {
+        $value = $_ENV[$key] ?? $_SERVER[$key] ?? getenv($key);
+
+        if ($value === false || $value === null) {
+            return $default;
+        }
+
+        if (!is_string($value)) {
+            return $value;
+        }
+
+        // Handle string booleans and null
+        $lowerValue = strtolower($value);
+        if ($lowerValue === 'true') {
+            return true;
+        }
+        if ($lowerValue === 'false') {
+            return false;
+        }
+        if ($lowerValue === 'null') {
+            return null;
+        }
+
+        return $value;
     }
-    
-    // Handle string booleans
-    $lowerValue = strtolower($value);
-    if ($lowerValue === 'true') {
-        return true;
-    }
-    if ($lowerValue === 'false') {
-        return false;
-    }
-    if ($lowerValue === 'null') {
-        return null;
-    }
-    
-    return $value;
 }
 
 /**
  * Get the path to the resources directory
  */
-function resource_path($path = '')
-{
-    $basePath = dirname(__DIR__) . '/resources';
-    return $path ? $basePath . '/' . trim($path, '/') : $basePath;
+if (!function_exists('resource_path')) {
+    function resource_path($path = '')
+    {
+        $basePath = dirname(__DIR__) . '/resources';
+        return $path ? $basePath . '/' . trim($path, '/') : $basePath;
+    }
 }
 
 /**
  * Parse comma-separated string to array
  */
-function parseEnvArray($value, $default = [])
-{
-    if (empty($value)) {
-        return $default;
+if (!function_exists('parseEnvArray')) {
+    function parseEnvArray($value, $default = [])
+    {
+        if ($value === null || $value === false || $value === '') {
+            return $default;
+        }
+
+        if (is_array($value)) {
+            return $value;
+        }
+
+        if (!is_string($value)) {
+            return $default;
+        }
+
+        $values = array_map('trim', explode(',', $value));
+        $values = array_values(array_filter($values, static fn($v) => $v !== ''));
+
+        return $values ?: $default;
     }
-    
-    if (is_array($value)) {
-        return $value;
-    }
-    
-    $values = explode(',', $value);
-    return array_map('trim', $values);
 }
 
 return [

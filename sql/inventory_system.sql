@@ -1,102 +1,124 @@
 -- ============================================================
--- Inventory System Database Setup
+-- Inventory System Database Setup for PostgreSQL
 -- Database: inventory_system
 -- ============================================================
 
--- Create the database
-CREATE DATABASE IF NOT EXISTS inventory_system 
-CHARACTER SET utf8mb4 
-COLLATE utf8mb4_unicode_ci;
-
-USE inventory_system;
+-- Note: Database creation is handled by setup.php
 
 -- ============================================================
 -- Users Table (for authentication)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS users (
-    id INT PRIMARY KEY AUTO_INCREMENT,
+    id SERIAL PRIMARY KEY,
     username VARCHAR(50) UNIQUE NOT NULL,
     password VARCHAR(255) NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     full_name VARCHAR(100) NOT NULL,
-    role ENUM('admin', 'manager', 'staff') DEFAULT 'staff',
-    is_active BOOLEAN DEFAULT TRUE,
+    phone VARCHAR(20),
+    customer_group VARCHAR(50) DEFAULT 'regular',
+    role VARCHAR(20) DEFAULT 'staff' CHECK (role IN ('admin', 'manager', 'staff', 'customer')),
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     INDEX idx_username (username),
     INDEX idx_email (email),
     INDEX idx_role (role)
-) ENGINE=InnoDB;
+);
 
 -- ============================================================
 -- Categories Table
 -- ============================================================
 CREATE TABLE IF NOT EXISTS categories (
-    id INT PRIMARY KEY AUTO_INCREMENT,
+    id SERIAL PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     description TEXT,
-    parent_id INT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
+    parent_id INTEGER NULL REFERENCES categories(id) ON DELETE SET NULL,
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (parent_id) REFERENCES categories(id) ON DELETE SET NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     INDEX idx_name (name),
     INDEX idx_parent (parent_id)
-) ENGINE=InnoDB;
+);
 
 -- ============================================================
 -- Products Table (Inventory Items)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS products (
-    id INT PRIMARY KEY AUTO_INCREMENT,
+    id SERIAL PRIMARY KEY,
     sku VARCHAR(50) UNIQUE NOT NULL,
     barcode VARCHAR(50),
     name VARCHAR(200) NOT NULL,
     description TEXT,
-    category_id INT NOT NULL,
+    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
     unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    quantity INT NOT NULL DEFAULT 0,
-    reorder_level INT NOT NULL DEFAULT 10,
-    is_active BOOLEAN DEFAULT TRUE,
+    quantity INTEGER NOT NULL DEFAULT 0,
+    reorder_level INTEGER NOT NULL DEFAULT 10,
+    is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE RESTRICT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     
     INDEX idx_sku (sku),
     INDEX idx_barcode (barcode),
     INDEX idx_category (category_id),
     INDEX idx_name (name),
     INDEX idx_quantity (quantity)
-) ENGINE=InnoDB;
+);
 
 -- ============================================================
 -- Stock Logs Table (Audit Table for Inventory Changes)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS stock_logs (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    product_id INT NOT NULL,
-    user_id INT NOT NULL,
-    action ENUM('add', 'remove', 'adjust', 'sale', 'return', 'transfer') NOT NULL,
-    quantity_before INT NOT NULL,
-    quantity_after INT NOT NULL,
-    quantity_changed INT NOT NULL,
+    id SERIAL PRIMARY KEY,
+    product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    action VARCHAR(20) NOT NULL CHECK (action IN ('add', 'remove', 'adjust', 'sale', 'return', 'transfer')),
+    quantity_before INTEGER NOT NULL,
+    quantity_after INTEGER NOT NULL,
+    quantity_changed INTEGER NOT NULL,
     reference_number VARCHAR(50),
     notes TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE,
-    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
     
     INDEX idx_product (product_id),
     INDEX idx_user (user_id),
     INDEX idx_action (action),
     INDEX idx_created (created_at)
-) ENGINE=InnoDB;
+);
+
+-- ============================================================
+-- Create trigger for updated_at
+-- ============================================================
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- Create triggers for all tables
+CREATE TRIGGER update_users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_categories_updated_at
+    BEFORE UPDATE ON categories
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_products_updated_at
+    BEFORE UPDATE ON products
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_stock_logs_updated_at
+    BEFORE UPDATE ON stock_logs
+    FOR EACH ROW
+    EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================
 -- Insert Default Admin User
@@ -163,7 +185,7 @@ SELECT
     c.name AS category_name
 FROM products p
 JOIN categories c ON p.category_id = c.id
-WHERE p.quantity <= p.reorder_level AND p.is_active = TRUE;
+WHERE p.quantity <= p.reorder_level AND p.is_active = true;
 
 CREATE OR REPLACE VIEW v_product_stock_summary AS
 SELECT 
@@ -177,10 +199,10 @@ SELECT
     c.name AS category_name
 FROM products p
 JOIN categories c ON p.category_id = c.id
-WHERE p.is_active = TRUE;
+WHERE p.is_active = true;
 
 -- ============================================================
 -- Grant Privileges (adjust as needed for your setup)
 -- ============================================================
--- GRANT ALL PRIVILEGES ON inventory_system.* TO 'root'@'localhost';
--- FLUSH PRIVILEGES;
+-- GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO postgres;
+-- GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO postgres;
