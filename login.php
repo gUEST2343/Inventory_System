@@ -10,7 +10,15 @@
 session_start();
 
 // Include database connection
-require_once 'db_connect.php';
+require_once __DIR__ . '/db_connect.php';
+
+/**
+ * Escape output for safe HTML rendering.
+ */
+function e(string $value): string
+{
+    return htmlspecialchars($value, ENT_QUOTES, 'UTF-8');
+}
 
 // Check if database connection failed
 $db_error = '';
@@ -30,21 +38,23 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['logged_in']) && $_SESSION['l
 // Initialize error message
 $error = '';
 $success = $_SESSION['flash_success'] ?? '';
+$submittedLogin = '';
 unset($_SESSION['flash_success']);
 
 // Process login form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    
+
     // Get and sanitize input
     $login = trim($_POST['login'] ?? ($_POST['username'] ?? ''));
     $password = $_POST['password'] ?? '';
-    
+    $submittedLogin = $login;
+
     // Validate input
     if (empty($login) || empty($password)) {
         $error = 'Please enter both your email or username and password.';
-    } elseif ($pdo === null) {
+    } elseif (!($pdo instanceof PDO)) {
         // Database connection is not available
-        $error = 'Database connection is unavailable. Please try again later.';
+        $error = $db_connection_error ?: 'Database connection is unavailable. Please try again later.';
     } else {
         try {
             // Prepare SQL statement to prevent SQL injection
@@ -52,15 +62,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 SELECT id, username, password, email, full_name, role
                 FROM users
                 WHERE (LOWER(username) = LOWER(:login) OR LOWER(email) = LOWER(:email))
-                  AND is_active = :is_active
+                  AND is_active = TRUE
                 LIMIT 1
             ");
             $stmt->execute([
                 'login' => $login,
                 'email' => $login,
-                'is_active' => true,
             ]);
-            $user = $stmt->fetch();
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
             
             // Verify password
             if ($user && password_verify($password, $user['password'])) {
@@ -78,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['login_time'] = time();
                 
                 // Update last login time (optional)
-                $updateStmt = $pdo->prepare("UPDATE users SET updated_at = NOW() WHERE id = :id");
+                $updateStmt = $pdo->prepare('UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = :id');
                 $updateStmt->execute(['id' => $user['id']]);
                 
                 // Redirect based on user role
@@ -135,19 +144,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             <?php if (!empty($error)): ?>
                 <div class="error-message">
-                    <?php echo htmlspecialchars($error); ?>
+                    <?php echo e($error); ?>
                 </div>
             <?php endif; ?>
 
             <?php if (!empty($db_error)): ?>
                 <div class="error-message">
-                    <?php echo htmlspecialchars($db_error); ?>
+                    <?php echo e($db_error); ?>
                 </div>
             <?php endif; ?>
 
             <?php if (!empty($success)): ?>
                 <div class="error-message" style="background: rgba(16, 185, 129, 0.12); border-color: rgba(16, 185, 129, 0.28); color: #d3f6e4;">
-                    <?php echo htmlspecialchars($success); ?>
+                    <?php echo e($success); ?>
                 </div>
             <?php endif; ?>
             
@@ -167,7 +176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         placeholder="Enter your email or username"
                         required
                         autocomplete="username"
-                        value="<?php echo isset($_POST['login']) ? htmlspecialchars($_POST['login']) : (isset($_POST['username']) ? htmlspecialchars($_POST['username']) : ''); ?>"
+                        value="<?php echo e($submittedLogin); ?>"
                     >
                 </div>
                 
