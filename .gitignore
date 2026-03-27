@@ -1,0 +1,33 @@
+# Database configuration (DO NOT commit sensitive data) 
+db_connect.php 
+.env 
+*.log 
+ 
+# OS files 
+.DS_Store 
+Thumbs.db 
+desktop.ini 
+ 
+# IDE files 
+.vscode/ 
+.idea/ 
+*.swo 
+*.swp 
+*.swn 
+*.bak 
+ 
+# XAMPP specific 
+logs/ 
+temp/ 
+tmp/ 
+*.tmp 
+ 
+# Session files 
+*.session 
+sessions/ 
+ 
+# Database backups 
+*.sql 
+*.sql.gz 
+*.backup 
+*.dump 
