@@ -295,32 +295,47 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
     <title>StockFlow — <?= htmlspecialchars($page_title) ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Sora:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+    // Apply the saved theme before styles paint to reduce flashing.
+    (function () {
+        const storageKey = 'admin-theme';
+        const savedTheme = localStorage.getItem(storageKey);
+        const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = savedTheme === 'light' || savedTheme === 'dark'
+            ? savedTheme
+            : (systemPrefersDark ? 'dark' : 'light');
+
+        document.documentElement.setAttribute('data-theme', theme);
+    })();
+    </script>
     <style>
     /* ═══════════════════════════════════════════
        DESIGN TOKENS
     ═══════════════════════════════════════════ */
     :root {
-        /* Core palette — deep slate + electric indigo */
-        --bg:          #0d0f14;
-        --bg-2:        #12151c;
-        --bg-3:        #181c26;
-        --bg-4:        #1e2330;
-        --surface:     #242938;
-        --surface-2:   #2c3244;
+        color-scheme: light;
+
+        /* Core palette — clean cloud neutrals + electric indigo */
+        --bg:          #f4f7fb;
+        --bg-2:        #ebf0f7;
+        --bg-3:        #dde7f3;
+        --bg-4:        #d2dceb;
+        --surface:     #ffffff;
+        --surface-2:   #f8fbff;
 
         --accent:      #6366f1;
-        --accent-glow: rgba(99,102,241,.28);
+        --accent-glow: rgba(99,102,241,.18);
         --accent-dim:  rgba(99,102,241,.12);
         --accent-2:    #22d3ee;   /* cyan */
         --accent-3:    #f59e0b;   /* amber */
         --accent-4:    #10b981;   /* emerald */
         --accent-5:    #f43f5e;   /* rose */
 
-        --text:        #e8eaf0;
-        --text-2:      #9ba3b8;
-        --text-3:      #5b6480;
-        --border:      rgba(255,255,255,.07);
-        --border-2:    rgba(255,255,255,.12);
+        --text:        #172033;
+        --text-2:      #556177;
+        --text-3:      #7d8798;
+        --border:      rgba(23,32,51,.10);
+        --border-2:    rgba(23,32,51,.16);
 
         /* Semantic */
         --success:     #10b981;
@@ -342,6 +357,71 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         --text-secondary: var(--text-2);
         --text-muted:     var(--text-3);
         --border-color:   var(--border);
+        --gradient-primary: linear-gradient(135deg, var(--accent), var(--accent-2));
+        --border-radius-sm: 8px;
+        --border-radius-md: 14px;
+        --success-light: var(--success-bg);
+        --warning-light: var(--warning-bg);
+        --danger-light:  var(--danger-bg);
+        --info-light:    var(--info-bg);
+        --shadow-md:      0 14px 32px rgba(15,23,42,.08);
+        --shadow-lg:      0 20px 48px rgba(15,23,42,.12);
+        --header-bg:      rgba(255,255,255,.82);
+
+        /* Sidebar */
+        --sidebar-w:   240px;
+        --sidebar-collapsed: 68px;
+        --header-h:    64px;
+        --radius:      12px;
+        --radius-lg:   18px;
+        --theme-toggle-bg: var(--surface);
+        --theme-toggle-text: var(--text);
+        --theme-shadow-focus: 0 0 0 3px rgba(99,102,241,.18);
+        --theme-transition: .32s ease;
+    }
+
+    :root[data-theme="dark"] {
+        color-scheme: dark;
+
+        --bg:          #0d0f14;
+        --bg-2:        #12151c;
+        --bg-3:        #181c26;
+        --bg-4:        #1e2330;
+        --surface:     #242938;
+        --surface-2:   #2c3244;
+
+        --accent:      #6366f1;
+        --accent-glow: rgba(99,102,241,.28);
+        --accent-dim:  rgba(99,102,241,.12);
+        --accent-2:    #22d3ee;
+        --accent-3:    #f59e0b;
+        --accent-4:    #10b981;
+        --accent-5:    #f43f5e;
+
+        --text:        #e8eaf0;
+        --text-2:      #9ba3b8;
+        --text-3:      #5b6480;
+        --border:      rgba(255,255,255,.07);
+        --border-2:    rgba(255,255,255,.12);
+
+        --success:     #10b981;
+        --warning:     #f59e0b;
+        --danger:      #f43f5e;
+        --info:        #22d3ee;
+
+        --success-bg:  rgba(16,185,129,.12);
+        --warning-bg:  rgba(245,158,11,.12);
+        --danger-bg:   rgba(244,63,94,.12);
+        --info-bg:     rgba(34,211,238,.12);
+
+        --primary:        var(--accent);
+        --secondary:      var(--accent-4);
+        --bg-card:        var(--surface);
+        --bg-main:        var(--bg-3);
+        --text-primary:   var(--text);
+        --text-secondary: var(--text-2);
+        --text-muted:     var(--text-3);
+        --border-color:   var(--border);
         --shadow-md:      0 4px 20px rgba(0,0,0,.4);
         --shadow-lg:      0 8px 40px rgba(0,0,0,.5);
         --gradient-primary: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -351,13 +431,17 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         --warning-light: var(--warning-bg);
         --danger-light:  var(--danger-bg);
         --info-light:    var(--info-bg);
+        --header-bg:      rgba(13,15,20,.8);
 
-        /* Sidebar */
         --sidebar-w:   240px;
         --sidebar-collapsed: 68px;
         --header-h:    64px;
         --radius:      12px;
         --radius-lg:   18px;
+        --theme-toggle-bg: var(--surface);
+        --theme-toggle-text: var(--text);
+        --theme-shadow-focus: 0 0 0 3px rgba(99,102,241,.28);
+        --theme-transition: .32s ease;
     }
 
     /* ═══════════════════════════════════════════
@@ -373,6 +457,7 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         font-size: 14px;
         line-height: 1.6;
         -webkit-font-smoothing: antialiased;
+        transition: background-color var(--theme-transition), color var(--theme-transition);
     }
 
     /* Scrollbar */
@@ -383,6 +468,34 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
     a { color: inherit; text-decoration: none; }
     button { font-family: inherit; }
     input, select, textarea { font-family: inherit; }
+    .sidebar,
+    .header,
+    .search-box,
+    .header-icon-btn,
+    .notification-dropdown,
+    .user-profile,
+    .mobile-menu-btn,
+    .card,
+    .card-footer,
+    .sidebar-toggle,
+    .collapse-btn {
+        transition:
+            background-color var(--theme-transition),
+            border-color var(--theme-transition),
+            color var(--theme-transition),
+            box-shadow var(--theme-transition);
+    }
+    .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+    }
 
     /* ═══════════════════════════════════════════
        LAYOUT SHELL
@@ -416,7 +529,7 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         position: absolute;
         top: 0; left: 0; right: 0;
         height: 200px;
-        background: radial-gradient(ellipse at 50% -20%, rgba(99,102,241,.2) 0%, transparent 70%);
+        background: radial-gradient(ellipse at 50% -20%, var(--accent-glow) 0%, transparent 70%);
         pointer-events: none;
     }
 
@@ -576,7 +689,7 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
     ═══════════════════════════════════════════ */
     .header {
         height: var(--header-h);
-        background: rgba(13,15,20,.8);
+        background: var(--header-bg);
         backdrop-filter: blur(20px);
         border-bottom: 1px solid var(--border);
         display: flex;
@@ -636,6 +749,10 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         color: var(--text-2); cursor: pointer; transition: all .2s; position: relative;
     }
     .header-icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-2); }
+    .header-icon-btn:focus-visible {
+        outline: none;
+        box-shadow: var(--theme-shadow-focus);
+    }
     .header-icon-btn .badge-dot {
         width: 7px; height: 7px; background: var(--accent); border-radius: 50%;
         position: absolute; top: 8px; right: 8px;
@@ -680,6 +797,49 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
     .user-info { display: flex; flex-direction: column; }
     .user-name { font-size: .8rem; font-weight: 600; color: var(--text); line-height: 1.2; }
     .user-role { font-size: .7rem; color: var(--text-3); text-transform: capitalize; }
+
+    /* Theme toggle */
+    .theme-toggle {
+        overflow: hidden;
+    }
+    .theme-toggle__icon {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        transition: opacity var(--theme-transition), transform var(--theme-transition);
+        pointer-events: none;
+    }
+    .theme-toggle__icon svg {
+        width: 18px;
+        height: 18px;
+    }
+    .theme-toggle__icon--sun svg {
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 1.8;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    .theme-toggle__icon--moon svg {
+        fill: currentColor;
+    }
+    :root:not([data-theme="dark"]) .theme-toggle__icon--sun {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+    }
+    :root:not([data-theme="dark"]) .theme-toggle__icon--moon {
+        opacity: 0;
+        transform: scale(.6) rotate(-25deg);
+    }
+    :root[data-theme="dark"] .theme-toggle__icon--sun {
+        opacity: 0;
+        transform: scale(.6) rotate(25deg);
+    }
+    :root[data-theme="dark"] .theme-toggle__icon--moon {
+        opacity: 1;
+        transform: scale(1) rotate(0deg);
+    }
 
     /* ═══════════════════════════════════════════
        MAIN CONTENT
@@ -1095,6 +1255,16 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
         .top-products { grid-template-columns: 1fr; }
     }
 
+    @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+            animation: none !important;
+            transition: none !important;
+            scroll-behavior: auto !important;
+        }
+    }
+
     /* ═══════════════════════════════════════════
        MONOSPACE NUMBERS
     ═══════════════════════════════════════════ */
@@ -1215,6 +1385,28 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
                     <input type="text" placeholder="Search anything…" id="globalSearch">
                 </div>
 
+                <button
+                    type="button"
+                    class="header-icon-btn theme-toggle"
+                    id="themeToggle"
+                    aria-label="Switch to dark mode"
+                    aria-pressed="false"
+                    title="Toggle color theme"
+                >
+                    <span class="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="4.25"></circle>
+                            <path d="M12 2v2.25M12 19.75V22M4.93 4.93l1.59 1.59M17.48 17.48l1.59 1.59M2 12h2.25M19.75 12H22M4.93 19.07l1.59-1.59M17.48 6.52l1.59-1.59"></path>
+                        </svg>
+                    </span>
+                    <span class="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M21 13.15A8.95 8.95 0 1 1 10.85 3 7.15 7.15 0 0 0 21 13.15Z"></path>
+                        </svg>
+                    </span>
+                    <span class="sr-only">Toggle dark and light mode</span>
+                </button>
+
                 <div class="header-icon-btn" id="notificationBtn" title="Notifications">
                     <i class="fas fa-bell" style="font-size:15px"></i>
                     <?php if ($notification_count > 0): ?>
@@ -1268,6 +1460,48 @@ $page_title = $page_titles[$page] ?? ucfirst($page);
 </div>
 
 <script>
+    const storageKey = 'admin-theme';
+    const root = document.documentElement;
+    const themeToggle = document.getElementById('themeToggle');
+    const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
+
+    function getSavedTheme() {
+        const savedTheme = localStorage.getItem(storageKey);
+        return savedTheme === 'light' || savedTheme === 'dark' ? savedTheme : null;
+    }
+
+    function getSystemTheme() {
+        return systemTheme.matches ? 'dark' : 'light';
+    }
+
+    function applyTheme(theme) {
+        const isDark = theme === 'dark';
+        root.setAttribute('data-theme', theme);
+        themeToggle?.setAttribute('aria-pressed', String(isDark));
+        themeToggle?.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+        themeToggle?.setAttribute('title', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+    }
+
+    applyTheme(getSavedTheme() || getSystemTheme());
+
+    themeToggle?.addEventListener('click', () => {
+        const nextTheme = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        localStorage.setItem(storageKey, nextTheme);
+        applyTheme(nextTheme);
+    });
+
+    const handleSystemThemeChange = (event) => {
+        if (!getSavedTheme()) {
+            applyTheme(event.matches ? 'dark' : 'light');
+        }
+    };
+
+    if (typeof systemTheme.addEventListener === 'function') {
+        systemTheme.addEventListener('change', handleSystemThemeChange);
+    } else if (typeof systemTheme.addListener === 'function') {
+        systemTheme.addListener(handleSystemThemeChange);
+    }
+
     // ── Sidebar collapse
     function toggleSidebar() {
         document.getElementById('sidebar').classList.toggle('collapsed');
