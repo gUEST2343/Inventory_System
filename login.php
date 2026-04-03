@@ -11,6 +11,7 @@ session_start();
 
 // Include database connection
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/account_verification_helper.php';
 
 /**
  * Escape output for safe HTML rendering.
@@ -57,9 +58,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = $db_connection_error ?: 'Database connection is unavailable. Please try again later.';
     } else {
         try {
+            ensureUsersRegistrationSchema($pdo);
+
             // Prepare SQL statement to prevent SQL injection
             $stmt = $pdo->prepare("
-                SELECT id, username, password, email, full_name, role
+                SELECT id, username, password, email, full_name, role, is_verified, account_status
                 FROM users
                 WHERE (LOWER(username) = LOWER(:login) OR LOWER(email) = LOWER(:email))
                   AND is_active = TRUE
@@ -73,33 +76,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             // Verify password
             if ($user && password_verify($password, $user['password'])) {
-                
-                // Regenerate session ID to prevent session fixation
-                session_regenerate_id(true);
-                
-                // Store user data in session
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['username'] = $user['username'];
-                $_SESSION['email'] = $user['email'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['logged_in'] = true;
-                $_SESSION['login_time'] = time();
-                
-                // Update last login time (optional)
-                $updateStmt = $pdo->prepare('UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = :id');
-                $updateStmt->execute(['id' => $user['id']]);
-                
-                // Redirect based on user role
-                $user_role = $user['role'];
-                if ($user_role === 'admin' || $user_role === 'manager') {
-                    // Admin/Manager goes to the admin dashboard
-                    header('Location: admin.php');
+                if (($user['account_status'] ?? 'active') === 'suspended') {
+                    $error = 'Your account is suspended. Please contact support.';
+                } elseif (empty($user['is_verified']) || ($user['account_status'] ?? 'pending') === 'pending') {
+                    session_regenerate_id(true);
+                    setPendingVerificationSession($user);
+                    $_SESSION['flash_success'] = 'Your account is not verified yet. Enter the 6-digit code we sent to your email.';
+                    header('Location: verify_code.php');
+                    exit;
                 } else {
-                    // Regular users go to customer dashboard
-                    header('Location: customer_dashboard.php');
+                    // Regenerate session ID to prevent session fixation
+                    session_regenerate_id(true);
+                    
+                    // Store user data in session
+                    $_SESSION['user_id'] = $user['id'];
+                    $_SESSION['username'] = $user['username'];
+                    $_SESSION['email'] = $user['email'];
+                    $_SESSION['full_name'] = $user['full_name'];
+                    $_SESSION['role'] = $user['role'];
+                    $_SESSION['logged_in'] = true;
+                    $_SESSION['login_time'] = time();
+                    
+                    // Update last login time (optional)
+                    $updateStmt = $pdo->prepare('UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = :id');
+                    $updateStmt->execute(['id' => $user['id']]);
+                    
+                    // Redirect based on user role
+                    $user_role = $user['role'];
+                    if ($user_role === 'admin' || $user_role === 'manager') {
+                        // Admin/Manager goes to the admin dashboard
+                        header('Location: admin.php');
+                    } else {
+                        // Regular users go to customer dashboard
+                        header('Location: customer_dashboard.php');
+                    }
+                    exit;
                 }
-                exit;
                 
             } else {
                 // Invalid credentials

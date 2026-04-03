@@ -10,6 +10,7 @@ require_once __DIR__ . '/admin/includes/auth-check.php';
 $page = isset($_GET['page']) ? $_GET['page'] : 'dashboard';
 
 require_once 'db_connect.php';
+require_once __DIR__ . '/includes/product_image_helper.php';
 
 if (!isset($pdo) || $pdo === null) {
     die("Critical Error: Database connection failed. Please check your PostgreSQL setup.");
@@ -18,6 +19,7 @@ if (!isset($pdo) || $pdo === null) {
 $user_name = $_SESSION['full_name'] ?? $_SESSION['username'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $canManageInventory = checkAdminPermission('products.edit') || checkAdminPermission('stock.manage');
+$productImageColumnAvailable = productImageColumnExists($pdo);
 
 // Notifications (lightweight summary)
 $notifications = [];
@@ -58,13 +60,137 @@ if (isset($_POST['action'])) {
     try {
         switch ($action) {
             case 'add_product':
-                $stmt = $pdo->prepare("INSERT INTO products (name, sku, description, category_id, unit_price, cost_price, quantity, reorder_level, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, true)");
-                $stmt->execute([$_POST['name'], $_POST['sku'], $_POST['description'] ?? '', $_POST['category_id'], $_POST['unit_price'], $_POST['cost_price'] ?? 0, $_POST['quantity'], $_POST['reorder_level'] ?? 10]);
+                $name = trim((string) ($_POST['name'] ?? ''));
+                $sku = trim((string) ($_POST['sku'] ?? ''));
+                $description = trim((string) ($_POST['description'] ?? ''));
+                $categoryId = filter_var($_POST['category_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $unitPrice = filter_var($_POST['unit_price'] ?? null, FILTER_VALIDATE_FLOAT);
+                $costPrice = filter_var($_POST['cost_price'] ?? 0, FILTER_VALIDATE_FLOAT);
+                $quantity = filter_var($_POST['quantity'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                $reorderLevel = filter_var($_POST['reorder_level'] ?? 10, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                $hasImageUpload = isset($_FILES['image']) && (int) ($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+
+                if ($name === '' || $sku === '' || $categoryId === false || $unitPrice === false || $quantity === false) {
+                    $result = ['success' => false, 'message' => 'Please complete all required product fields.'];
+                    break;
+                }
+
+                if ($costPrice === false) {
+                    $costPrice = 0;
+                }
+
+                if ($reorderLevel === false) {
+                    $reorderLevel = 10;
+                }
+
+                if ($hasImageUpload && !$productImageColumnAvailable) {
+                    $result = ['success' => false, 'message' => "Run sql/add_product_image_path.sql before uploading product images."];
+                    break;
+                }
+
+                $imagePath = null;
+                if ($hasImageUpload) {
+                    $uploadResult = handleProductImageUpload($_FILES['image']);
+                    if (!$uploadResult['success']) {
+                        $result = ['success' => false, 'message' => $uploadResult['message'] ?? 'Product image upload failed.'];
+                        break;
+                    }
+                    $imagePath = $uploadResult['path'] ?? null;
+                }
+
+                if ($productImageColumnAvailable) {
+                    $stmt = $pdo->prepare("
+                        INSERT INTO products (
+                            name, sku, description, category_id, unit_price, cost_price, quantity, reorder_level, image_path, is_active
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true)
+                    ");
+                    $stmt->execute([$name, $sku, $description, $categoryId, $unitPrice, $costPrice, $quantity, $reorderLevel, $imagePath]);
+                } else {
+                    $stmt = $pdo->prepare("
+                        INSERT INTO products (
+                            name, sku, description, category_id, unit_price, cost_price, quantity, reorder_level, is_active
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, true)
+                    ");
+                    $stmt->execute([$name, $sku, $description, $categoryId, $unitPrice, $costPrice, $quantity, $reorderLevel]);
+                }
+
                 $result = ['success' => true, 'message' => 'Product added successfully'];
                 break;
             case 'update_product':
-                $stmt = $pdo->prepare("UPDATE products SET name=?, sku=?, description=?, category_id=?, unit_price=?, cost_price=?, quantity=?, reorder_level=? WHERE id=?");
-                $stmt->execute([$_POST['name'], $_POST['sku'], $_POST['description'] ?? '', $_POST['category_id'], $_POST['unit_price'], $_POST['cost_price'] ?? 0, $_POST['quantity'], $_POST['reorder_level'] ?? 10, $_POST['id']]);
+                $productId = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $name = trim((string) ($_POST['name'] ?? ''));
+                $sku = trim((string) ($_POST['sku'] ?? ''));
+                $description = trim((string) ($_POST['description'] ?? ''));
+                $categoryId = filter_var($_POST['category_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $unitPrice = filter_var($_POST['unit_price'] ?? null, FILTER_VALIDATE_FLOAT);
+                $costPrice = filter_var($_POST['cost_price'] ?? 0, FILTER_VALIDATE_FLOAT);
+                $quantity = filter_var($_POST['quantity'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                $reorderLevel = filter_var($_POST['reorder_level'] ?? 10, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]);
+                $removeImage = isset($_POST['remove_image']) && $_POST['remove_image'] === '1';
+                $hasImageUpload = isset($_FILES['image']) && (int) ($_FILES['image']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE;
+
+                if ($productId === false || $name === '' || $sku === '' || $categoryId === false || $unitPrice === false || $quantity === false) {
+                    $result = ['success' => false, 'message' => 'Please complete all required product fields.'];
+                    break;
+                }
+
+                if ($costPrice === false) {
+                    $costPrice = 0;
+                }
+
+                if ($reorderLevel === false) {
+                    $reorderLevel = 10;
+                }
+
+                if (($removeImage || $hasImageUpload) && !$productImageColumnAvailable) {
+                    $result = ['success' => false, 'message' => "Run sql/add_product_image_path.sql before managing product images."];
+                    break;
+                }
+
+                $existingImagePath = null;
+                if ($productImageColumnAvailable) {
+                    $stmt = $pdo->prepare("SELECT image_path FROM products WHERE id = ?");
+                    $stmt->execute([$productId]);
+                    $existingProduct = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                    if (!$existingProduct) {
+                        $result = ['success' => false, 'message' => 'Product not found.'];
+                        break;
+                    }
+
+                    $existingImagePath = $existingProduct['image_path'] ?? null;
+                }
+
+                $imagePathToSave = $existingImagePath;
+
+                if ($hasImageUpload) {
+                    $uploadResult = handleProductImageUpload($_FILES['image'], $existingImagePath);
+                    if (!$uploadResult['success']) {
+                        $result = ['success' => false, 'message' => $uploadResult['message'] ?? 'Product image upload failed.'];
+                        break;
+                    }
+                    $imagePathToSave = $uploadResult['path'] ?? null;
+                } elseif ($removeImage) {
+                    deleteProductImageFile($existingImagePath);
+                    $imagePathToSave = null;
+                }
+
+                if ($productImageColumnAvailable) {
+                    $stmt = $pdo->prepare("
+                        UPDATE products
+                        SET name = ?, sku = ?, description = ?, category_id = ?, unit_price = ?, cost_price = ?, quantity = ?, reorder_level = ?, image_path = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$name, $sku, $description, $categoryId, $unitPrice, $costPrice, $quantity, $reorderLevel, $imagePathToSave, $productId]);
+                } else {
+                    $stmt = $pdo->prepare("
+                        UPDATE products
+                        SET name = ?, sku = ?, description = ?, category_id = ?, unit_price = ?, cost_price = ?, quantity = ?, reorder_level = ?
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$name, $sku, $description, $categoryId, $unitPrice, $costPrice, $quantity, $reorderLevel, $productId]);
+                }
+
                 $result = ['success' => true, 'message' => 'Product updated successfully'];
                 break;
             case 'delete_product':

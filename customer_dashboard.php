@@ -9,6 +9,8 @@ if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/modules/payment_module.php';
 require_once __DIR__ . '/classes/Mpesa.php';
+require_once __DIR__ . '/includes/mpesa_db_helper.php';
+require_once __DIR__ . '/includes/product_image_helper.php';
 
 $user_role = $_SESSION['role'] ?? 'customer';
 $user_name = $_SESSION['full_name'] ?? $_SESSION['username'];
@@ -118,6 +120,9 @@ if (isset($_POST['pay_now'])) {
         if ($pdo === null) {
             $message = 'Database connection unavailable. Please try again later.';
             $message_type = 'error';
+        } elseif (!mpesaTransactionsTableExists($pdo)) {
+            $message = 'M-Pesa payments are not ready yet. Run sql/mpesa_postgresql.sql first.';
+            $message_type = 'error';
         } else {
             $mpesa = new Mpesa();
             $paymentModule = new PaymentModule($pdo);
@@ -172,68 +177,54 @@ if (isset($_POST['pay_now'])) {
                     }
                     $accountReference = 'ORD-' . $order_id;
                     $stkResult = $mpesa->stkPush($phone, $total, $accountReference, "Payment for order #$order_id");
-                    if (!$stkResult['success']) throw new Exception('Failed to initiate M-Pesa payment: ' . ($stkResult['message'] ?? 'Unknown error'));
-                    $isMockPayment = !empty($stkResult['mock']);
-
-                    if ($isMockPayment) {
-                        $paymentSync = $paymentModule->syncPaymentStatus($order_id, 'completed', [
-                            'transaction_id' => $stkResult['checkout_request_id'] ?? null,
-                            'payment_gateway' => 'mpesa',
-                            'payment_method' => 'mpesa',
-                            'amount' => $total,
-                            'checkout_request_id' => $stkResult['checkout_request_id'] ?? null,
-                            'reference_number' => $accountReference,
-                            'gateway_response' => [
-                                'mock' => true,
-                                'phone' => $phone,
-                                'stk_result' => $stkResult,
-                            ],
-                        ], [
-                            'manage_transaction' => false,
-                        ]);
-                    } else {
-                        $paymentSync = $paymentModule->syncPaymentStatus($order_id, 'pending', [
-                            'transaction_id' => $stkResult['checkout_request_id'] ?? null,
-                            'payment_gateway' => 'mpesa',
-                            'payment_method' => 'mpesa',
-                            'amount' => $total,
-                            'checkout_request_id' => $stkResult['checkout_request_id'] ?? null,
-                            'reference_number' => $accountReference,
-                            'gateway_response' => [
-                                'phone' => $phone,
-                                'stk_result' => $stkResult,
-                            ],
-                        ], [
-                            'manage_transaction' => false,
-                        ]);
+                    if (!$stkResult['success']) {
+                        throw new Exception('Failed to initiate M-Pesa payment: ' . ($stkResult['message'] ?? 'Unknown error'));
                     }
+
+                    $paymentSync = $paymentModule->syncPaymentStatus($order_id, 'pending', [
+                        'transaction_id' => $stkResult['checkout_request_id'] ?? null,
+                        'payment_gateway' => 'mpesa',
+                        'payment_method' => 'mpesa',
+                        'amount' => $total,
+                        'checkout_request_id' => $stkResult['checkout_request_id'] ?? null,
+                        'reference_number' => $accountReference,
+                        'gateway_response' => [
+                            'phone' => $phone,
+                            'stk_result' => $stkResult,
+                        ],
+                    ], [
+                        'manage_transaction' => false,
+                    ]);
 
                     if (!$paymentSync['success']) {
                         throw new Exception($paymentSync['message'] ?? 'Failed to synchronize payment status.');
                     }
 
-                    try {
-                        $paymentStmt = $pdo->prepare("
-                            INSERT INTO payments (order_id, phone, amount, payment_method, status, transaction_id, checkout_request_id, created_at)
-                            VALUES (?, ?, ?, 'mpesa', ?, ?, ?, NOW())
-                        ");
-                        $paymentStmt->execute([
-                            $order_id,
-                            $phone,
-                            $total,
-                            $isMockPayment ? 'completed' : 'pending',
-                            $stkResult['checkout_request_id'] ?? null,
-                            $stkResult['checkout_request_id'] ?? null,
-                        ]);
-                    } catch (PDOException $ignored) {
-                    }
+                    $mpesaStmt = $pdo->prepare("
+                        INSERT INTO mpesa_transactions (
+                            order_id,
+                            checkout_request_id,
+                            merchant_request_id,
+                            phone_number,
+                            amount,
+                            result_desc,
+                            status
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'pending')
+                    ");
+                    $mpesaStmt->execute([
+                        $order_id,
+                        $stkResult['checkout_request_id'] ?? null,
+                        $stkResult['merchant_request_id'] ?? null,
+                        $mpesa->formatPhoneNumber($phone),
+                        $total,
+                        $stkResult['customer_message'] ?? $stkResult['message'] ?? 'STK Push sent',
+                    ]);
 
                     $pdo->commit();
                     $_SESSION['cart'] = [];
-                    $message = $isMockPayment
-                        ? "Sandbox payment completed for Order #$order_id (" . number_format($total, 2) . ")."
-                        : "Payment request sent to $phone for Order #$order_id (" . number_format($total, 2) . ").";
-                    $message_type = 'success';
+                    $_SESSION['payment_feedback'] = "M-Pesa prompt sent to {$phone} for Order #{$order_id}.";
+                    header('Location: payment_status.php?order_id=' . urlencode((string) $order_id));
+                    exit;
                 } catch (Exception $e) {
                     if ($pdo->inTransaction()) $pdo->rollBack();
                     $message = 'Payment failed: ' . $e->getMessage();
@@ -609,8 +600,14 @@ $cart_count = array_sum($_SESSION['cart']);
         display: flex; align-items: center; justify-content: center;
         position: relative; overflow: hidden;
     }
-    .product-image i { font-size: 3.5rem; color: var(--ink-4); transition: transform .3s, color .3s; }
-    .product-card:hover .product-image i { transform: scale(1.1); color: rgba(212,168,83,.2); }
+    .product-image img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        transition: transform .3s ease;
+    }
+    .product-card:hover .product-image img { transform: scale(1.04); }
 
     /* Category chip on image */
     .product-cat {
@@ -625,6 +622,12 @@ $cart_count = array_sum($_SESSION['cart']);
 
     .product-name { font-weight: 600; font-size: .98rem; color: var(--text); line-height: 1.3; }
     .product-sku { font-size: .75rem; color: var(--text-3); font-family: 'Courier New', monospace; letter-spacing: .04em; }
+    .product-description {
+        font-size: .82rem;
+        line-height: 1.55;
+        color: var(--text-2);
+        min-height: 2.5em;
+    }
 
     .product-price {
         font-family: var(--font-heading); font-size: 1.55rem;
@@ -735,6 +738,13 @@ $cart_count = array_sum($_SESSION['cart']);
         background: var(--ink-3); border: 1px solid var(--border);
         display: grid; place-items: center; font-size: 1.8rem;
         color: var(--text-3); flex-shrink: 0;
+        overflow: hidden;
+    }
+    .cart-item-img img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
     }
 
     .cart-item-info { flex: 1; min-width: 0; }
@@ -946,18 +956,22 @@ $cart_count = array_sum($_SESSION['cart']);
             <div class="products-grid">
                 <?php foreach ($products as $product): ?>
                     <?php $unit_price = floatval($product['unit_price'] ?? 0);
+                    $productImage = resolveProductImagePath($product['image_path'] ?? null);
+                    $productDescription = trim((string)($product['description'] ?? ''));
+                    $productDescription = $productDescription !== '' ? (strlen($productDescription) > 117 ? substr($productDescription, 0, 117) . '...' : $productDescription) : 'No description available for this product yet.';
                     $stock_class = 'in'; $stock_text = $product['quantity'] . ' in stock';
                     if ($product['quantity'] <= 5) { $stock_class = 'low'; $stock_text = 'Only ' . $product['quantity'] . ' left'; }
                     if ($product['quantity'] == 0) { $stock_class = 'out'; $stock_text = 'Out of stock'; }
                     ?>
                     <div class="product-card" data-name="<?= strtolower(htmlspecialchars($product['name'])) ?>">
                         <div class="product-image">
-                            <i class="fas fa-box-open"></i>
+                            <img src="<?= htmlspecialchars($productImage) ?>" alt="<?= htmlspecialchars($product['name']) ?>" loading="lazy">
                             <span class="product-cat">Product</span>
                         </div>
                         <div class="product-info">
                             <div class="product-name"><?= htmlspecialchars($product['name']) ?></div>
                             <div class="product-sku">SKU: <?= htmlspecialchars($product['sku'] ?? 'N/A') ?></div>
+                            <div class="product-description"><?= htmlspecialchars($productDescription) ?></div>
                             <div class="product-price">$<?= number_format($unit_price, 2) ?></div>
                             <div class="product-stock <?= $stock_class ?>">
                                 <span class="stock-dot"></span>
@@ -1015,9 +1029,12 @@ $cart_count = array_sum($_SESSION['cart']);
                     </div>
                     <div class="cart-items">
                         <?php foreach ($cart_items as $item): ?>
-                            <?php $item_price = floatval($item['unit_price'] ?? 0); ?>
+                            <?php $item_price = floatval($item['unit_price'] ?? 0);
+                            $cartItemImage = resolveProductImagePath($item['image_path'] ?? null); ?>
                             <div class="cart-item">
-                                <div class="cart-item-img"><i class="fas fa-box-open"></i></div>
+                                <div class="cart-item-img">
+                                    <img src="<?= htmlspecialchars($cartItemImage) ?>" alt="<?= htmlspecialchars($item['name']) ?>" loading="lazy">
+                                </div>
                                 <div class="cart-item-info">
                                     <div class="cart-item-name"><?= htmlspecialchars($item['name']) ?></div>
                                     <div class="cart-item-unit">$<?= number_format($item_price, 2) ?> each</div>

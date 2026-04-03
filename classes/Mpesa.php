@@ -1,565 +1,281 @@
 <?php
-/**
- * M-Pesa Payment Integration Class
- * Handles M-Pesa STK Push, B2C, and C2B transactions
- */
 
-class Mpesa {
-    private $environment;
-    private $consumerKey;
-    private $consumerSecret;
-    private $shortcode;
-    private $passkey;
-    private $callbackUrl;
-    private $confirmationUrl;
-    private $validationUrl;
-    private $lastError;
-    
-    // M-Pesa Endpoints
-    private $endpoints = [
-        'sandbox' => [
-            'oauth' => 'https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
-            'stk_push' => 'https://sandbox.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
-            'stk_status' => 'https://sandbox.safaricom.co.ke/mpesa/stkpushquery/v1/query',
-            'b2c' => 'https://sandbox.safaricom.co.ke/mpesa/b2c/v1/paymentrequest',
-            'c2b_register' => 'https://sandbox.safaricom.co.ke/mpesa/c2b/v1/registerurl',
-            'c2b_simulate' => 'https://sandbox.safaricom.co.ke/mpesa/c2b/v1/simulate',
-            'balance' => 'https://sandbox.safaricom.co.ke/mpesa/accountbalance/v1/query',
-            'transaction_status' => 'https://sandbox.safaricom.co.ke/mpesa/transactionstatus/v1/query'
-        ],
-        'production' => [
-            'oauth' => 'https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials',
-            'stk_push' => 'https://api.safaricom.co.ke/mpesa/stkpush/v1/processrequest',
-            'stk_status' => 'https://api.safaricom.co.ke/mpesa/stkpushquery/v1/query',
-            'b2c' => 'https://api.safaricom.co.ke/mpesa/b2c/v1/paymentrequest',
-            'c2b_register' => 'https://api.safaricom.co.ke/mpesa/c2b/v1/registerurl',
-            'c2b_simulate' => 'https://api.safaricom.co.ke/mpesa/c2b/v1/simulate',
-            'balance' => 'https://api.safaricom.co.ke/mpesa/accountbalance/v1/query',
-            'transaction_status' => 'https://api.safaricom.co.ke/mpesa/transactionstatus/v1/query'
-        ]
-    ];
-    
-    /**
-     * Constructor
-     */
-    public function __construct() {
-        $this->environment = $this->getConfigValue('MPESA_ENV', defined('MPESA_ENVIRONMENT') ? MPESA_ENVIRONMENT : 'sandbox');
-        $this->consumerKey = $this->getConfigValue('MPESA_CONSUMER_KEY', defined('MPESA_CONSUMER_KEY') ? MPESA_CONSUMER_KEY : 'your_consumer_key');
-        $this->consumerSecret = $this->getConfigValue('MPESA_CONSUMER_SECRET', defined('MPESA_CONSUMER_SECRET') ? MPESA_CONSUMER_SECRET : 'your_consumer_secret');
-        $this->shortcode = $this->getConfigValue('MPESA_SHORTCODE', defined('MPESA_SHORTCODE') ? MPESA_SHORTCODE : '174379');
-        $this->passkey = $this->getConfigValue('MPESA_PASSKEY', defined('MPESA_PASSKEY') ? MPESA_PASSKEY : 'your_passkey');
-        $this->callbackUrl = $this->getConfigValue('MPESA_CALLBACK_URL', defined('MPESA_CALLBACK_URL') ? MPESA_CALLBACK_URL : 'http://localhost/api/mpesa/callback.php');
-        $this->confirmationUrl = $this->getConfigValue('MPESA_CONFIRMATION_URL', 'http://localhost/api/mpesa/confirmation.php');
-        $this->validationUrl = $this->getConfigValue('MPESA_VALIDATION_URL', 'http://localhost/api/mpesa/validation.php');
-        $this->lastError = '';
-    }
+class Mpesa
+{
+    private string $environment;
+    private string $consumerKey;
+    private string $consumerSecret;
+    private string $shortcode;
+    private string $passkey;
+    private string $callbackUrl;
+    private string $baseUrl;
+    private int $timeoutSeconds;
 
-    /**
-     * Read config from getenv, $_ENV, $_SERVER, then fallback.
-     */
-    private function getConfigValue($key, $fallback = '') {
-        $envValue = getenv($key);
-        if ($envValue !== false && $envValue !== '') {
-            return $envValue;
-        }
-        if (isset($_ENV[$key]) && $_ENV[$key] !== '') {
-            return $_ENV[$key];
-        }
-        if (isset($_SERVER[$key]) && $_SERVER[$key] !== '') {
-            return $_SERVER[$key];
-        }
-        return $fallback;
-    }
-
-    /**
-     * Return last error message for debugging.
-     */
-    public function getLastError() {
-        return $this->lastError;
-    }
-
-    /**
-     * Check if core M-Pesa credentials are configured.
-     */
-    public function isConfigured() {
-        return
-            !empty($this->consumerKey) &&
-            !empty($this->consumerSecret) &&
-            !empty($this->passkey) &&
-            $this->consumerKey !== 'your_consumer_key' &&
-            $this->consumerSecret !== 'your_consumer_secret' &&
-            $this->passkey !== 'your_passkey';
-    }
-
-    /**
-     * Send HTTP request using cURL (preferred) or stream fallback.
-     */
-    private function sendRequest($url, $headers = [], $payload = null) {
-        // Prefer cURL when extension is available.
-        if (function_exists('curl_init')) {
-            $ch = curl_init($url);
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
-
-            if ($payload !== null) {
-                curl_setopt($ch, CURLOPT_POST, true);
-                curl_setopt($ch, CURLOPT_POSTFIELDS, is_string($payload) ? $payload : json_encode($payload));
+    public function __construct(array $overrides = [])
+    {
+        $config = [];
+        $configPath = __DIR__ . '/../config/mpesa.php';
+        if (is_file($configPath)) {
+            $loaded = require $configPath;
+            if (is_array($loaded)) {
+                $config = $loaded;
             }
-
-            $response = curl_exec($ch);
-            $error = curl_error($ch);
-            $statusCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-
-            if ($response === false) {
-                return [
-                    'success' => false,
-                    'status_code' => $statusCode,
-                    'body' => null,
-                    'error' => $error ?: 'Unknown cURL error'
-                ];
-            }
-
-            return [
-                'success' => true,
-                'status_code' => $statusCode,
-                'body' => $response,
-                'error' => null
-            ];
         }
 
-        // Fallback when cURL extension is not enabled.
-        if (!function_exists('file_get_contents')) {
-            return [
-                'success' => false,
-                'status_code' => 0,
-                'body' => null,
-                'error' => 'HTTP client unavailable. Enable PHP cURL extension.'
-            ];
-        }
+        $settings = array_merge($config, $overrides);
+        $baseUrls = $settings['base_urls'] ?? [];
 
-        $method = $payload !== null ? 'POST' : 'GET';
-        $headersString = implode("\r\n", $headers);
-
-        $contextOptions = [
-            'http' => [
-                'method' => $method,
-                'header' => $headersString,
-                'ignore_errors' => true,
-                'timeout' => 30
-            ],
-            'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false
-            ]
-        ];
-
-        if ($payload !== null) {
-            $contextOptions['http']['content'] = is_string($payload) ? $payload : json_encode($payload);
-        }
-
-        $context = stream_context_create($contextOptions);
-        $response = @file_get_contents($url, false, $context);
-
-        if ($response === false) {
-            $lastError = error_get_last();
-            return [
-                'success' => false,
-                'status_code' => 0,
-                'body' => null,
-                'error' => $lastError['message'] ?? 'HTTP request failed'
-            ];
-        }
-
-        return [
-            'success' => true,
-            'status_code' => 200,
-            'body' => $response,
-            'error' => null
-        ];
+        $this->environment = strtolower((string) ($settings['environment'] ?? 'sandbox'));
+        $this->consumerKey = trim((string) ($settings['consumer_key'] ?? ''));
+        $this->consumerSecret = trim((string) ($settings['consumer_secret'] ?? ''));
+        $this->shortcode = trim((string) ($settings['shortcode'] ?? ''));
+        $this->passkey = trim((string) ($settings['passkey'] ?? ''));
+        $this->callbackUrl = trim((string) ($settings['callback_url'] ?? ''));
+        $this->timeoutSeconds = max(10, (int) ($settings['timeout_seconds'] ?? 30));
+        $this->baseUrl = rtrim((string) ($baseUrls[$this->environment] ?? $baseUrls['sandbox'] ?? 'https://sandbox.safaricom.co.ke'), '/');
     }
-    
-    /**
-     * Get access token
-     */
-    public function getAccessToken() {
-        // Guard against placeholder/default credentials.
-        if (
-            !$this->consumerKey || !$this->consumerSecret ||
-            $this->consumerKey === 'your_consumer_key' ||
-            $this->consumerSecret === 'your_consumer_secret'
-        ) {
-            $this->lastError = 'M-Pesa credentials are not configured. Set MPESA_CONSUMER_KEY and MPESA_CONSUMER_SECRET.';
-            error_log($this->lastError);
+
+    public function validatePhoneNumber(string $phoneNumber): bool
+    {
+        return $this->formatPhoneNumber($phoneNumber) !== null;
+    }
+
+    public function formatPhoneNumber(string $phoneNumber): ?string
+    {
+        $normalized = preg_replace('/\D+/', '', $phoneNumber);
+        if ($normalized === null || $normalized === '') {
             return null;
         }
 
-        $credentials = base64_encode($this->consumerKey . ':' . $this->consumerSecret);
-
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['oauth'],
-            ['Authorization: Basic ' . $credentials]
-        );
-
-        if (!$httpResult['success']) {
-            $this->lastError = 'M-Pesa OAuth request failed: ' . $httpResult['error'];
-            error_log($this->lastError);
-            return null;
+        if (strpos($normalized, '0') === 0 && strlen($normalized) === 10) {
+            $normalized = '254' . substr($normalized, 1);
+        } elseif (strpos($normalized, '7') === 0 && strlen($normalized) === 9) {
+            $normalized = '254' . $normalized;
+        } elseif (strpos($normalized, '1') === 0 && strlen($normalized) === 9) {
+            $normalized = '254' . $normalized;
         }
 
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['access_token'])) {
-            $this->lastError = '';
-            return $result['access_token'];
-        }
+        return preg_match('/^254(1|7)\d{8}$/', $normalized) ? $normalized : null;
+    }
 
-        $apiError = $result['errorMessage'] ?? $result['error_description'] ?? $result['error'] ?? 'Unknown OAuth error';
-        $this->lastError = 'M-Pesa OAuth token not returned: ' . $apiError;
-        error_log($this->lastError);
-        
-        return null;
-    }
-    
-    /**
-     * Generate password for STK Push
-     */
-    private function generatePassword() {
-        $timestamp = date('YmdHis');
-        $password = base64_encode($this->shortcode . $this->passkey . $timestamp);
-        return $password;
-    }
-    
-    /**
-     * Initiate STK Push
-     */
-    public function stkPush($phoneNumber, $amount, $accountReference, $transactionDescription = '') {
-        // Local/sandbox fallback for development when credentials are not set.
+    public function stkPush(string $phoneNumber, $amount, string $accountReference, string $transactionDesc = 'Order payment'): array
+    {
         if (!$this->isConfigured()) {
-            if ($this->environment === 'sandbox') {
-                $mockCheckoutRequestId = 'MOCK-' . date('YmdHis') . '-' . mt_rand(1000, 9999);
-                return [
-                    'success' => true,
-                    'message' => 'Sandbox mock payment accepted (credentials not configured).',
-                    'checkout_request_id' => $mockCheckoutRequestId,
-                    'merchant_request_id' => 'MOCK-MERCHANT-' . mt_rand(1000, 9999),
-                    'mock' => true
-                ];
-            }
-
             return [
                 'success' => false,
-                'message' => 'M-Pesa credentials are not configured. Set MPESA_CONSUMER_KEY and MPESA_CONSUMER_SECRET.'
+                'message' => 'M-Pesa is not configured. Missing: ' . implode(', ', $this->getMissingConfigurationFields()) . '. Set Daraja credentials in environment variables or create config/mpesa.local.php from config/mpesa.local.example.php.',
             ];
         }
 
-        $accessToken = $this->getAccessToken();
-        
-        if (!$accessToken) {
+        $formattedPhone = $this->formatPhoneNumber($phoneNumber);
+        if ($formattedPhone === null) {
             return [
                 'success' => false,
-                'message' => $this->lastError ?: 'Failed to get access token'
+                'message' => 'Invalid phone number. Use 2547XXXXXXXX or 2541XXXXXXXX.',
             ];
         }
-        
-        $phone = $this->formatPhoneNumber($phoneNumber);
+
+        $amountValue = (float) $amount;
+        if ($amountValue <= 0) {
+            return [
+                'success' => false,
+                'message' => 'Amount must be greater than zero.',
+            ];
+        }
+
         $timestamp = date('YmdHis');
-        $password = $this->generatePassword();
-        
         $payload = [
             'BusinessShortCode' => $this->shortcode,
-            'Password' => $password,
+            'Password' => base64_encode($this->shortcode . $this->passkey . $timestamp),
             'Timestamp' => $timestamp,
-            'TransactionType' => 'CustomerBuyGoodsOnline',
-            'Amount' => round($amount),
-            'PartyA' => $phone,
+            'TransactionType' => 'CustomerPayBillOnline',
+            'Amount' => (int) round($amountValue),
+            'PartyA' => $formattedPhone,
             'PartyB' => $this->shortcode,
-            'PhoneNumber' => $phone,
-            'CallBackURL' => $this->callbackUrl,
-            'AccountReference' => $accountReference,
-            'TransactionDesc' => $transactionDescription ?: 'Payment for order ' . $accountReference
+            'PhoneNumber' => $formattedPhone,
+            'CallbackURL' => $this->callbackUrl,
+            'AccountReference' => substr(trim($accountReference) !== '' ? trim($accountReference) : 'LuxeStore', 0, 20),
+            'TransactionDesc' => substr(trim($transactionDesc) !== '' ? trim($transactionDesc) : 'LuxeStore payment', 0, 50),
         ];
 
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['stk_push'],
-            [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json'
-            ],
-            $payload
-        );
-
-        if (!$httpResult['success']) {
-            return [
-                'success' => false,
-                'message' => 'Payment gateway request failed: ' . $httpResult['error']
-            ];
+        $response = $this->request('/mpesa/stkpush/v1/processrequest', $payload);
+        if (!$response['success']) {
+            return $response;
         }
 
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['ResponseCode']) && $result['ResponseCode'] == 0) {
-            // Store the checkout request ID for status check
-            $_SESSION['mpesa_checkout_request_id'] = $result['CheckoutRequestID'];
-            
-            return [
-                'success' => true,
-                'message' => 'STK Push initiated successfully',
-                'checkout_request_id' => $result['CheckoutRequestID'],
-                'merchant_request_id' => $result['MerchantRequestID']
-            ];
-        }
-        
+        $body = $response['data'];
+        $accepted = isset($body['ResponseCode']) && (string) $body['ResponseCode'] === '0';
+
         return [
-            'success' => false,
-            'message' => $result['ResponseDescription'] ?? 'Failed to initiate STK Push',
-            'error_code' => $result['ResponseCode'] ?? null
+            'success' => $accepted,
+            'message' => $body['CustomerMessage'] ?? $body['errorMessage'] ?? ($accepted ? 'STK Push sent successfully.' : 'Failed to initiate STK Push.'),
+            'checkout_request_id' => $body['CheckoutRequestID'] ?? null,
+            'merchant_request_id' => $body['MerchantRequestID'] ?? null,
+            'response_code' => $body['ResponseCode'] ?? null,
+            'response_description' => $body['ResponseDescription'] ?? null,
+            'customer_message' => $body['CustomerMessage'] ?? null,
+            'raw_response' => $body,
         ];
     }
-    
-    /**
-     * Check STK Push status
-     */
-    public function stkStatus($checkoutRequestId) {
-        $accessToken = $this->getAccessToken();
-        
-        if (!$accessToken) {
+
+    public function queryStkStatus(string $checkoutRequestId): array
+    {
+        if (!$this->isConfigured()) {
             return [
                 'success' => false,
-                'message' => $this->lastError ?: 'Failed to get access token'
+                'message' => 'M-Pesa is not configured.',
             ];
         }
-        
+
+        $checkoutRequestId = trim($checkoutRequestId);
+        if ($checkoutRequestId === '') {
+            return [
+                'success' => false,
+                'message' => 'CheckoutRequestID is required.',
+            ];
+        }
+
         $timestamp = date('YmdHis');
-        $password = $this->generatePassword();
-        
         $payload = [
             'BusinessShortCode' => $this->shortcode,
-            'Password' => $password,
+            'Password' => base64_encode($this->shortcode . $this->passkey . $timestamp),
             'Timestamp' => $timestamp,
-            'CheckoutRequestID' => $checkoutRequestId
+            'CheckoutRequestID' => $checkoutRequestId,
         ];
 
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['stk_status'],
-            [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json'
-            ],
-            $payload
-        );
+        return $this->request('/mpesa/stkpushquery/v1/query', $payload);
+    }
 
-        if (!$httpResult['success']) {
+    public function maskPhoneNumber(string $phoneNumber): string
+    {
+        $formatted = $this->formatPhoneNumber($phoneNumber);
+        if ($formatted === null) {
+            return $phoneNumber;
+        }
+
+        return substr($formatted, 0, 5) . '****' . substr($formatted, -3);
+    }
+
+    public function isConfigured(): bool
+    {
+        return count($this->getMissingConfigurationFields()) === 0;
+    }
+
+    public function getMissingConfigurationFields(): array
+    {
+        $missing = [];
+
+        if ($this->consumerKey === '') {
+            $missing[] = 'consumer_key';
+        }
+        if ($this->consumerSecret === '') {
+            $missing[] = 'consumer_secret';
+        }
+        if ($this->shortcode === '') {
+            $missing[] = 'shortcode';
+        }
+        if ($this->passkey === '') {
+            $missing[] = 'passkey';
+        }
+        if ($this->callbackUrl === '') {
+            $missing[] = 'callback_url';
+        }
+
+        return $missing;
+    }
+
+    private function getAccessToken(): string
+    {
+        $url = $this->baseUrl . '/oauth/v1/generate?grant_type=client_credentials';
+        $ch = curl_init($url);
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $this->timeoutSeconds,
+            CURLOPT_HTTPAUTH => CURLAUTH_BASIC,
+            CURLOPT_USERPWD => $this->consumerKey . ':' . $this->consumerSecret,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        $raw = curl_exec($ch);
+        if ($raw === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
+            throw new RuntimeException('Could not contact M-Pesa OAuth endpoint: ' . $error);
+        }
+
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
+
+        $decoded = json_decode($raw, true);
+        if ($statusCode >= 400 || !is_array($decoded) || empty($decoded['access_token'])) {
+            $message = is_array($decoded) ? ($decoded['errorMessage'] ?? $decoded['error_description'] ?? 'Could not get access token.') : 'Could not get access token.';
+            throw new RuntimeException($message);
+        }
+
+        return (string) $decoded['access_token'];
+    }
+
+    private function request(string $path, array $payload): array
+    {
+        try {
+            $token = $this->getAccessToken();
+        } catch (Throwable $e) {
             return [
                 'success' => false,
-                'message' => 'Failed to check STK status: ' . $httpResult['error']
+                'message' => $e->getMessage(),
             ];
         }
 
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['ResponseCode'])) {
+        $url = $this->baseUrl . $path;
+        $ch = curl_init($url);
+        $jsonPayload = json_encode($payload, JSON_UNESCAPED_SLASHES);
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT => $this->timeoutSeconds,
+            CURLOPT_POST => true,
+            CURLOPT_HTTPHEADER => [
+                'Authorization: Bearer ' . $token,
+                'Content-Type: application/json',
+                'Accept: application/json',
+            ],
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
+        ]);
+
+        $raw = curl_exec($ch);
+        if ($raw === false) {
+            $error = curl_error($ch);
+            curl_close($ch);
             return [
-                'success' => true,
-                'status' => $result,
-                'is_complete' => $result['ResponseCode'] == 0 && isset($result['ResultCode']),
-                'is_success' => isset($result['ResultCode']) && $result['ResultCode'] == 0
+                'success' => false,
+                'message' => 'Unable to reach the M-Pesa API: ' . $error,
             ];
         }
-        
-        return [
-            'success' => false,
-            'message' => 'Failed to check STK status'
-        ];
-    }
-    
-    /**
-     * B2C Payment (Business to Customer)
-     */
-    public function b2c($phoneNumber, $amount, $commandId, $occasion = '', $remarks = '') {
-        $accessToken = $this->getAccessToken();
-        
-        if (!$accessToken) {
-            return ['success' => false, 'message' => $this->lastError ?: 'Failed to get access token'];
-        }
-        
-        $phone = $this->formatPhoneNumber($phoneNumber);
-        
-        $payload = [
-            'InitiatorName' => getenv('MPESA_INITIATOR_NAME') ?: 'testapi',
-            'SecurityCredential' => getenv('MPESA_SECURITY_CREDENTIAL') ?: 'your_security_credential',
-            'CommandID' => $commandId, // SalaryPayment, BusinessPayment, PromotionPayment
-            'Amount' => round($amount),
-            'PartyA' => $this->shortcode,
-            'PartyB' => $phone,
-            'Remarks' => $remarks ?: 'B2C Payment',
-            'QueueTimeOutURL' => $this->callbackUrl,
-            'ResultURL' => $this->callbackUrl,
-            'Occasion' => $occasion
-        ];
 
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['b2c'],
-            [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json'
-            ],
-            $payload
-        );
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+        curl_close($ch);
 
-        if (!$httpResult['success']) {
-            return ['success' => false, 'message' => 'B2C request failed: ' . $httpResult['error']];
-        }
-
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['ResponseCode']) && $result['ResponseCode'] == 0) {
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
             return [
-                'success' => true,
-                'message' => 'B2C payment initiated',
-                'conversation_id' => $result['ConversationID'],
-                'originator_conversation_id' => $result['OriginatorConversationID']
+                'success' => false,
+                'message' => 'Invalid response from the M-Pesa API.',
+                'status_code' => $statusCode,
+                'raw_response' => $raw,
             ];
         }
-        
+
+        $success = $statusCode >= 200 && $statusCode < 300 && !isset($decoded['errorCode']);
+
         return [
-            'success' => false,
-            'message' => $result['ResponseDescription'] ?? 'Failed to initiate B2C'
+            'success' => $success,
+            'message' => $decoded['errorMessage'] ?? $decoded['ResponseDescription'] ?? ($success ? 'Request completed successfully.' : 'M-Pesa request failed.'),
+            'status_code' => $statusCode,
+            'data' => $decoded,
         ];
     }
-    
-    /**
-     * Register C2B URLs
-     */
-    public function registerUrls() {
-        $accessToken = $this->getAccessToken();
-        
-        if (!$accessToken) {
-            return ['success' => false, 'message' => $this->lastError ?: 'Failed to get access token'];
-        }
-        
-        $payload = [
-            'ShortCode' => $this->shortcode,
-            'ResponseType' => 'Completed',
-            'ConfirmationURL' => $this->confirmationUrl,
-            'ValidationURL' => $this->validationUrl
-        ];
-
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['c2b_register'],
-            [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json'
-            ],
-            $payload
-        );
-
-        if (!$httpResult['success']) {
-            return ['success' => false, 'message' => 'Failed to register C2B URLs: ' . $httpResult['error']];
-        }
-
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['ResponseCode']) && $result['ResponseCode'] == 0) {
-            return ['success' => true, 'message' => 'C2B URLs registered successfully'];
-        }
-        
-        return ['success' => false, 'message' => 'Failed to register C2B URLs'];
-    }
-    
-    /**
-     * Simulate C2B
-     */
-    public function simulateC2B($phoneNumber, $amount, $commandId = 'CustomerPayBillOnline') {
-        $accessToken = $this->getAccessToken();
-        
-        if (!$accessToken) {
-            return ['success' => false, 'message' => $this->lastError ?: 'Failed to get access token'];
-        }
-        
-        $phone = $this->formatPhoneNumber($phoneNumber);
-        
-        $payload = [
-            'ShortCode' => $this->shortcode,
-            'CommandID' => $commandId,
-            'Amount' => round($amount),
-            'Msisdn' => $phone,
-            'BillRefNumber' => 'TEST',
-            'InvoiceNumber' => '',
-            'CallBackMetaData' => [
-                'BusinessShortCode' => $this->shortcode,
-                'BillRefNumber' => 'TEST',
-                'InvoiceNumber' => '',
-                'Amount' => round($amount)
-            ]
-        ];
-
-        $httpResult = $this->sendRequest(
-            $this->endpoints[$this->environment]['c2b_simulate'],
-            [
-                'Authorization: Bearer ' . $accessToken,
-                'Content-Type: application/json'
-            ],
-            $payload
-        );
-
-        if (!$httpResult['success']) {
-            return ['success' => false, 'message' => 'Failed to simulate C2B: ' . $httpResult['error']];
-        }
-
-        $result = json_decode($httpResult['body'], true);
-        
-        if (isset($result['ResponseCode']) && $result['ResponseCode'] == 0) {
-            return ['success' => true, 'message' => 'C2B simulation successful'];
-        }
-        
-        return ['success' => false, 'message' => 'Failed to simulate C2B'];
-    }
-    
-    /**
-     * Format phone number to M-Pesa format
-     */
-    private function formatPhoneNumber($phone) {
-        // Remove any non-digit characters
-        $phone = preg_replace('/[^0-9]/', '', $phone);
-        
-        // If starts with 0, replace with 254
-        if (substr($phone, 0, 1) === '0') {
-            $phone = '254' . substr($phone, 1);
-        }
-        
-        // If doesn't start with 254, add it
-        if (substr($phone, 0, 3) !== '254') {
-            $phone = '254' . $phone;
-        }
-        
-        return $phone;
-    }
-    
-    /**
-     * Validate phone number
-     */
-    public function validatePhoneNumber($phone) {
-        $phone = preg_replace('/[^0-9]/', '', $phone);
-        
-        // Valid formats: 07XXXXXXXX (10 digits), 254XXXXXXXXX (12 digits)
-        if (preg_match('/^(07|01)/', $phone) && strlen($phone) === 10) {
-            return true;
-        }
-        
-        if (preg_match('/^254/', $phone) && strlen($phone) === 12) {
-            return true;
-        }
-        
-        return false;
-    }
-}
-
-/**
- * Helper function to get M-Pesa instance
- */
-function mpesa() {
-    return new Mpesa();
 }

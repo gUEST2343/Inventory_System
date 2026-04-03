@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360" role="img" aria-labelledby="title desc">
+  <title id="title">Product image placeholder</title>
+  <desc id="desc">Fallback image used when a product photo has not been uploaded.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f4efe4"/>
+      <stop offset="100%" stop-color="#d8c29a"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="360" rx="28" fill="url(#bg)"/>
+  <rect x="42" y="42" width="396" height="276" rx="22" fill="#fffaf0" opacity="0.72"/>
+  <path d="M156 222l42-52 52 58 36-44 58 66H136z" fill="#8f7a52" opacity="0.9"/>
+  <circle cx="180" cy="128" r="24" fill="#d4a853"/>
+  <rect x="136" y="92" width="208" height="176" rx="16" fill="none" stroke="#7b6746" stroke-width="14"/>
+  <text x="240" y="310" text-anchor="middle" font-family="Arial, sans-serif" font-size="26" fill="#5f5038">No Product Image</text>
+</svg>

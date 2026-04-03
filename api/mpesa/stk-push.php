@@ -1,121 +1,107 @@
 <?php
-/**
- * M-Pesa STK Push API Endpoint
- * Initiates STK Push payment request
- */
 
-// Set headers
+declare(strict_types=1);
+
 header('Content-Type: application/json');
-
-// Start session
 session_start();
 
-// Include required files
-require_once __DIR__ . '/../../config/constants.php';
 require_once __DIR__ . '/../../db_connect.php';
 require_once __DIR__ . '/../../classes/Mpesa.php';
-require_once __DIR__ . '/../../modules/payment_module.php';
+require_once __DIR__ . '/../../includes/mpesa_db_helper.php';
 
-// Check if request is POST
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Method not allowed'
-    ]);
+    echo json_encode(['success' => false, 'message' => 'Use POST for STK Push requests.']);
     exit;
 }
 
-// Get input data
-$input = json_decode(file_get_contents('php://input'), true);
-
-$phone = $input['phone'] ?? '';
-$amount = $input['amount'] ?? 0;
-$accountReference = $input['account_reference'] ?? '';
-$transactionDesc = $input['description'] ?? '';
-
-// Validate input
-$errors = [];
-
-if (empty($phone)) {
-    $errors[] = 'Phone number is required';
-}
-
-if (empty($amount) || $amount <= 0) {
-    $errors[] = 'Valid amount is required';
-}
-
-if (empty($accountReference)) {
-    $errors[] = 'Account reference is required';
-}
-
-if (!empty($errors)) {
-    http_response_code(400);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Validation failed',
-        'errors' => $errors
-    ]);
+if (!isset($_SESSION['logged_in']) || $_SESSION['logged_in'] !== true) {
+    http_response_code(401);
+    echo json_encode(['success' => false, 'message' => 'Authentication required.']);
     exit;
 }
 
-// Initialize M-Pesa
-$mpesa = new Mpesa();
-$paymentModule = new PaymentModule($pdo);
-
-// Validate phone number
-if (!$mpesa->validatePhoneNumber($phone)) {
-    http_response_code(400);
-    echo json_encode([
-        'success' => false,
-        'message' => 'Invalid phone number format. Use format: 07XXXXXXXX or 254XXXXXXXXX'
-    ]);
+if (!$pdo instanceof PDO) {
+    http_response_code(503);
+    echo json_encode(['success' => false, 'message' => 'Database connection unavailable.']);
     exit;
 }
 
-// Initiate STK Push
-$result = $mpesa->stkPush($phone, $amount, $accountReference, $transactionDesc);
+if (!mpesaTransactionsTableExists($pdo)) {
+    http_response_code(500);
+    echo json_encode(['success' => false, 'message' => 'Run sql/mpesa_postgresql.sql before using M-Pesa payments.']);
+    exit;
+}
 
-if ($result['success']) {
-    $paymentModule->registerGatewayRequest($accountReference, 'mpesa', [
-        'status' => 'pending',
-        'transaction_id' => $result['checkout_request_id'] ?? null,
-        'checkout_request_id' => $result['checkout_request_id'] ?? null,
-        'reference_number' => $accountReference,
-        'amount' => $amount,
-        'gateway_response' => [
-            'phone' => $phone,
-            'description' => $transactionDesc,
-            'mpesa_response' => $result,
-        ],
-    ]);
-
-    try {
-        $stmt = $pdo->prepare("
-            INSERT INTO payments (order_id, phone, amount, payment_method, status, transaction_id, checkout_request_id, created_at)
-            VALUES (?, ?, ?, 'mpesa', 'pending', ?, ?, NOW())
-        ");
-        $stmt->execute([
-            $accountReference,
-            $phone,
-            $amount,
-            $result['checkout_request_id'] ?? null,
-            $result['checkout_request_id'] ?? null,
-        ]);
-    } catch (PDOException $e) {
-        error_log("Failed to log payment: " . $e->getMessage());
+$input = $_POST;
+if (empty($input)) {
+    $decoded = json_decode(file_get_contents('php://input') ?: '', true);
+    if (is_array($decoded)) {
+        $input = $decoded;
     }
-    
-    http_response_code(200);
-    echo json_encode([
-        'success' => true,
-        'message' => 'Payment request sent. Please check your phone and enter PIN.',
-        'checkout_request_id' => $result['checkout_request_id']
-    ]);
-} else {
-    http_response_code(400);
-    echo json_encode([
-        'success' => false,
-        'message' => $result['message']
-    ]);
 }
+
+$orderId = filter_var($input['order_id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+$phoneNumber = trim((string) ($input['phone'] ?? ''));
+
+if ($orderId === false || $phoneNumber === '') {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'order_id and phone are required.']);
+    exit;
+}
+
+$orderStmt = $pdo->prepare("
+    SELECT id, user_id, total_amount
+    FROM orders
+    WHERE id = ?
+    LIMIT 1
+");
+$orderStmt->execute([$orderId]);
+$order = $orderStmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$order || (int) ($order['user_id'] ?? 0) !== (int) ($_SESSION['user_id'] ?? 0)) {
+    http_response_code(404);
+    echo json_encode(['success' => false, 'message' => 'Order not found.']);
+    exit;
+}
+
+$mpesa = new Mpesa();
+if (!$mpesa->validatePhoneNumber($phoneNumber)) {
+    http_response_code(422);
+    echo json_encode(['success' => false, 'message' => 'Use a valid Safaricom number like 2547XXXXXXXX.']);
+    exit;
+}
+
+$stkResult = $mpesa->stkPush($phoneNumber, (float) ($order['total_amount'] ?? 0), 'ORD-' . $orderId, 'Payment for order #' . $orderId);
+if (!$stkResult['success']) {
+    http_response_code(502);
+    echo json_encode(['success' => false, 'message' => $stkResult['message'] ?? 'Unable to initiate STK Push.']);
+    exit;
+}
+
+$insertStmt = $pdo->prepare("
+    INSERT INTO mpesa_transactions (
+        order_id,
+        checkout_request_id,
+        merchant_request_id,
+        phone_number,
+        amount,
+        result_desc,
+        status
+    ) VALUES (?, ?, ?, ?, ?, ?, 'pending')
+");
+$insertStmt->execute([
+    $orderId,
+    $stkResult['checkout_request_id'] ?? null,
+    $stkResult['merchant_request_id'] ?? null,
+    $mpesa->formatPhoneNumber($phoneNumber),
+    (float) ($order['total_amount'] ?? 0),
+    $stkResult['customer_message'] ?? $stkResult['message'] ?? 'STK Push sent',
+]);
+
+echo json_encode([
+    'success' => true,
+    'message' => $stkResult['customer_message'] ?? 'STK Push sent successfully.',
+    'checkout_request_id' => $stkResult['checkout_request_id'] ?? null,
+    'merchant_request_id' => $stkResult['merchant_request_id'] ?? null,
+]);

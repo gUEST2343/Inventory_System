@@ -4,6 +4,8 @@
  * Product management functionality
  */
 
+require_once __DIR__ . '/../includes/product_image_helper.php';
+
 // At the top of each module file
 if (!isset($pdo) || $pdo === null) {
     // Try to include db_connect again if we're in admin.php context
@@ -32,6 +34,10 @@ if (!isset($pdo) || $pdo === null) {
 if (basename($_SERVER['PHP_SELF']) == 'products.php') {
     header('Location: ../admin.php');
     exit;
+}
+
+if (!isset($productImageColumnAvailable)) {
+    $productImageColumnAvailable = productImageColumnExists($pdo);
 }
 
 // Get categories for dropdown
@@ -64,6 +70,12 @@ try {
                 <i class="fas fa-plus"></i> Add Product
             </button>
         </div>
+
+        <?php if (!$productImageColumnAvailable): ?>
+        <div style="padding: 0 24px 16px; color: var(--text-muted); font-size: 0.92rem;">
+            Run <code>sql/add_product_image_path.sql</code> once to enable product image uploads.
+        </div>
+        <?php endif; ?>
         
         <!-- Toolbar -->
         <div class="toolbar">
@@ -108,12 +120,13 @@ try {
                 </thead>
                 <tbody>
                     <?php foreach ($all_products as $product): ?>
+                    <?php $productImage = resolveProductImagePath($product['image_path'] ?? null); ?>
                     <tr data-category="<?php echo $product['category_id']; ?>" data-stock="<?php echo $product['quantity']; ?>">
                         <td><?php echo $product['id']; ?></td>
                         <td>
                             <div class="d-flex align-center gap-sm">
                                 <div class="product-image-mini">
-                                    <i class="fas fa-box"></i>
+                                    <img src="<?php echo htmlspecialchars($productImage); ?>" alt="<?php echo htmlspecialchars($product['name']); ?>">
                                 </div>
                                 <div>
                                     <strong><?php echo htmlspecialchars($product['name']); ?></strong>
@@ -177,9 +190,10 @@ try {
             <h3 class="modal-title" id="productModalTitle">Add Product</h3>
             <button class="modal-close" onclick="hideModal('productModal')">&times;</button>
         </div>
-        <form id="productForm" onsubmit="saveProduct(event)">
+        <form id="productForm" onsubmit="saveProduct(event)" enctype="multipart/form-data">
             <div class="modal-body">
                 <input type="hidden" id="productId" name="id">
+                <input type="hidden" id="productRemoveImage" name="remove_image" value="0">
                 <div class="form-group">
                     <label>Product Name *</label>
                     <input type="text" id="productName" name="name" required>
@@ -221,6 +235,42 @@ try {
                     <div class="form-group">
                         <label>Reorder Level</label>
                         <input type="number" id="productReorder" name="reorder_level" value="10">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Product Image <?php if ($productImageColumnAvailable): ?><span class="text-muted">(Admin upload)</span><?php endif; ?></label>
+                    <div class="product-image-upload">
+                        <div class="product-image-preview-wrap">
+                            <img
+                                id="productImagePreview"
+                                src="<?php echo htmlspecialchars(getProductPlaceholderImage()); ?>"
+                                alt="Product preview"
+                                class="product-image-preview"
+                            >
+                        </div>
+                        <div class="product-image-upload-fields">
+                            <input
+                                type="file"
+                                id="productImage"
+                                name="image"
+                                accept=".jpg,.jpeg,.png,.gif,.webp"
+                                onchange="updateProductImagePreviewFromFile(this)"
+                                <?php echo $productImageColumnAvailable ? '' : 'disabled'; ?>
+                            >
+                            <small class="text-muted">Accepted: JPG, PNG, GIF, WEBP. Max size: 5 MB.</small>
+                            <label class="image-remove-toggle <?php echo $productImageColumnAvailable ? '' : 'is-disabled'; ?>">
+                                <input
+                                    type="checkbox"
+                                    id="productRemoveImageToggle"
+                                    onchange="toggleProductImageRemoval(this)"
+                                    <?php echo $productImageColumnAvailable ? '' : 'disabled'; ?>
+                                >
+                                Remove current image
+                            </label>
+                            <?php if (!$productImageColumnAvailable): ?>
+                            <small class="text-danger">Image uploads are disabled until the database column is added.</small>
+                            <?php endif; ?>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -287,6 +337,61 @@ try {
     align-items: center;
     justify-content: center;
     color: var(--text-muted);
+    overflow: hidden;
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.product-image-mini img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.product-image-upload {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 16px;
+    align-items: start;
+}
+
+.product-image-preview-wrap {
+    width: 120px;
+    height: 120px;
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg-main);
+    border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
+}
+
+.product-image-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.product-image-upload-fields {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.image-remove-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 0.92rem;
+}
+
+.image-remove-toggle.is-disabled {
+    opacity: 0.6;
+}
+
+@media (max-width: 640px) {
+    .product-image-upload {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 
@@ -304,10 +409,13 @@ foreach ($all_products as $product) {
         'cost_price' => (float)($product['cost_price'] ?? 0),
         'quantity' => (int)($product['quantity'] ?? 0),
         'reorder_level' => (int)($product['reorder_level'] ?? 10),
+        'image_path' => (string)($product['image_path'] ?? ''),
+        'resolved_image_path' => resolveProductImagePath($product['image_path'] ?? null),
     ];
 }
 echo json_encode($productLookup);
 ?>;
+const defaultProductImage = <?php echo json_encode(getProductPlaceholderImage()); ?>;
 
 // Filter products
 function filterProducts() {
@@ -337,10 +445,16 @@ function resetProductForm() {
     document.getElementById('productModalTitle').textContent = 'Add Product';
     document.getElementById('productForm').reset();
     document.getElementById('productId').value = '';
+    document.getElementById('productRemoveImage').value = '0';
+    const removeToggle = document.getElementById('productRemoveImageToggle');
+    if (removeToggle) {
+        removeToggle.checked = false;
+    }
+    setProductImagePreview(defaultProductImage);
 }
 
 // Edit product
-function editProduct(id, name, sku, desc, categoryId, price, quantity, reorderLevel, costPrice) {
+function editProduct(id, name, sku, desc, categoryId, price, quantity, reorderLevel, costPrice, imagePath) {
     document.getElementById('productModalTitle').textContent = 'Edit Product';
     document.getElementById('productId').value = id;
     document.getElementById('productName').value = name;
@@ -351,6 +465,12 @@ function editProduct(id, name, sku, desc, categoryId, price, quantity, reorderLe
     document.getElementById('productCost').value = costPrice || 0;
     document.getElementById('productQty').value = quantity;
     document.getElementById('productReorder').value = reorderLevel || 10;
+    document.getElementById('productRemoveImage').value = '0';
+    const removeToggle = document.getElementById('productRemoveImageToggle');
+    if (removeToggle) {
+        removeToggle.checked = false;
+    }
+    setProductImagePreview(imagePath || defaultProductImage);
     showModal('productModal');
 }
 
@@ -369,7 +489,8 @@ function openEditProductById(productId) {
         product.unit_price,
         product.quantity,
         product.reorder_level,
-        product.cost_price
+        product.cost_price,
+        product.resolved_image_path
     );
 
     return true;
@@ -389,13 +510,12 @@ function openStockAdjustmentById(productId) {
 function saveProduct(e) {
     e.preventDefault();
     const formData = new FormData(e.target);
-    const data = Object.fromEntries(formData);
-    data.action = document.getElementById('productId').value ? 'update_product' : 'add_product';
+    formData.set('action', document.getElementById('productId').value ? 'update_product' : 'add_product');
+    formData.set('remove_image', document.getElementById('productRemoveImage').value || '0');
     
     fetch('admin.php', {
         method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: new URLSearchParams(data)
+        body: formData
     })
     .then(r => r.json())
     .then(result => {
@@ -410,6 +530,46 @@ function saveProduct(e) {
     .catch(err => {
         showNotification('An error occurred', 'error');
     });
+}
+
+function setProductImagePreview(src) {
+    const preview = document.getElementById('productImagePreview');
+    if (!preview) {
+        return;
+    }
+
+    preview.src = src || defaultProductImage;
+}
+
+function toggleProductImageRemoval(checkbox) {
+    document.getElementById('productRemoveImage').value = checkbox.checked ? '1' : '0';
+    if (checkbox.checked) {
+        setProductImagePreview(defaultProductImage);
+    } else {
+        const productId = document.getElementById('productId').value;
+        const existingProduct = productLookup[String(productId)];
+        setProductImagePreview(existingProduct?.resolved_image_path || defaultProductImage);
+    }
+}
+
+function updateProductImagePreviewFromFile(input) {
+    const file = input.files && input.files[0] ? input.files[0] : null;
+    if (!file) {
+        const productId = document.getElementById('productId').value;
+        const existingProduct = productLookup[String(productId)];
+        setProductImagePreview(existingProduct?.resolved_image_path || defaultProductImage);
+        return;
+    }
+
+    const removeToggle = document.getElementById('productRemoveImageToggle');
+    if (removeToggle) {
+        removeToggle.checked = false;
+    }
+    document.getElementById('productRemoveImage').value = '0';
+
+    const reader = new FileReader();
+    reader.onload = event => setProductImagePreview(event.target?.result || defaultProductImage);
+    reader.readAsDataURL(file);
 }
 
 // Delete product

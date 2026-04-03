@@ -72,9 +72,21 @@ class MailHelper
     public function sendEmail($to, $subject, $htmlBody, $altBody = '')
     {
         if (!$this->available || !$this->mail instanceof PHPMailer) {
+            $headers = [
+                'MIME-Version: 1.0',
+                'Content-type: text/html; charset=UTF-8',
+                'From: ' . $this->config['from_name'] . ' <' . $this->config['from_email'] . '>',
+                'Reply-To: ' . $this->config['reply_to'],
+            ];
+
+            $sent = @mail($to, $subject, $htmlBody, implode("\r\n", $headers));
+            if ($sent) {
+                return ['success' => true, 'message' => 'Email sent successfully using the server mail function.'];
+            }
+
             return [
                 'success' => false,
-                'message' => 'Email service is not available on this server yet.',
+                'message' => $this->initializationError !== '' ? $this->initializationError : 'Email service is not available on this server yet.',
             ];
         }
 
@@ -133,6 +145,54 @@ class MailHelper
         </html>";
 
         return $this->sendEmail($email, 'Verify Your Email Address', $htmlBody);
+    }
+
+    public function sendRegistrationVerificationCode(string $email, string $fullName, string $code, DateTimeInterface $expiry, string $verifyUrl)
+    {
+        $safeName = htmlspecialchars($fullName, ENT_QUOTES, 'UTF-8');
+        $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
+        $safeUrl = htmlspecialchars($verifyUrl, ENT_QUOTES, 'UTF-8');
+        $expiryLabel = htmlspecialchars($expiry->format('M j, Y g:i A'), ENT_QUOTES, 'UTF-8');
+
+        $htmlBody = "
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset='UTF-8'>
+            <style>
+                body { font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; background: #f8fafc; margin: 0; padding: 24px; }
+                .card { max-width: 620px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 18px; overflow: hidden; }
+                .header { background: linear-gradient(135deg, #c78b2a, #e3b766); color: #fff; padding: 24px 28px; }
+                .content { padding: 28px; }
+                .code { font-size: 34px; letter-spacing: 10px; font-weight: 700; text-align: center; color: #111827; background: #fff7e6; border: 1px dashed #e3b766; border-radius: 14px; padding: 18px; margin: 24px 0; }
+                .button { display: inline-block; padding: 12px 18px; background: #111827; color: #fff !important; text-decoration: none; border-radius: 10px; font-weight: 600; }
+                .footer { font-size: 13px; color: #6b7280; margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class='card'>
+                <div class='header'>
+                    <h2 style='margin:0;'>Verify your account</h2>
+                </div>
+                <div class='content'>
+                    <p>Hello {$safeName},</p>
+                    <p>Thanks for registering. Use the verification code below to activate your account.</p>
+                    <div class='code'>{$safeCode}</div>
+                    <p>This code expires at <strong>{$expiryLabel}</strong> and is valid for 15 minutes.</p>
+                    <p><a href='{$safeUrl}' class='button'>Open verification page</a></p>
+                    <p>If the button does not work, open this link in your browser:</p>
+                    <p><a href='{$safeUrl}'>{$safeUrl}</a></p>
+                    <div class='footer'>
+                        If you did not create this account, you can safely ignore this email.
+                    </div>
+                </div>
+            </div>
+        </body>
+        </html>";
+
+        $altBody = "Hello {$fullName},\n\nYour verification code is {$code}.\nIt expires at {$expiry->format('Y-m-d H:i:s')}.\nVerify here: {$verifyUrl}\n";
+
+        return $this->sendEmail($email, 'Your verification code', $htmlBody, $altBody);
     }
 
     public function sendOrderConfirmation($email, $username, $orderDetails)

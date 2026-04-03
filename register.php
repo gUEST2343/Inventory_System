@@ -2,6 +2,7 @@
 session_start();
 
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/account_verification_helper.php';
 
 if (isset($_SESSION['user_id'], $_SESSION['logged_in']) && $_SESSION['logged_in'] === true) {
     $redirect = in_array($_SESSION['role'] ?? '', ['admin', 'manager'], true)
@@ -21,60 +22,6 @@ function stringLength(string $value): int
     return function_exists('mb_strlen')
         ? mb_strlen($value)
         : strlen($value);
-}
-
-function ensureUsersTable(PDO $pdo): void
-{
-    $pdo->exec("
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            username VARCHAR(50) UNIQUE NOT NULL,
-            password VARCHAR(255) NOT NULL,
-            email VARCHAR(100) UNIQUE NOT NULL,
-            full_name VARCHAR(100) NOT NULL,
-            phone VARCHAR(20),
-            customer_group VARCHAR(50) NOT NULL DEFAULT 'regular',
-            role VARCHAR(20) NOT NULL DEFAULT 'customer',
-            is_active BOOLEAN NOT NULL DEFAULT TRUE,
-            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
-    ");
-
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS password VARCHAR(255)");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(100)");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS full_name VARCHAR(100)");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(20)");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS customer_group VARCHAR(50) DEFAULT 'regular'");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'customer'");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
-    $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
-
-    $pdo->exec("
-        UPDATE users
-        SET full_name = COALESCE(NULLIF(full_name, ''), username),
-            role = COALESCE(NULLIF(role, ''), 'customer'),
-            customer_group = COALESCE(NULLIF(customer_group, ''), 'regular'),
-            is_active = COALESCE(is_active, TRUE),
-            created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
-            updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
-        WHERE full_name IS NULL
-           OR role IS NULL
-           OR customer_group IS NULL
-           OR is_active IS NULL
-           OR created_at IS NULL
-           OR updated_at IS NULL
-    ");
-
-    $pdo->exec("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check");
-    $pdo->exec("
-        ALTER TABLE users
-        ADD CONSTRAINT users_role_check
-        CHECK (role IN ('admin', 'manager', 'staff', 'customer'))
-    ");
-
-    $pdo->exec("CREATE UNIQUE INDEX IF NOT EXISTS users_email_unique_ci_idx ON users (LOWER(email))");
 }
 
 function buildUsername(string $fullName, string $email): string
@@ -116,8 +63,11 @@ function generateUniqueUsername(PDO $pdo, string $fullName, string $email): stri
 $formValues = [
     'full_name' => '',
     'email' => '',
+    'phone' => '',
 ];
 $errors = [];
+$success_message = $_SESSION['flash_success'] ?? '';
+unset($_SESSION['flash_success']);
 
 if (empty($_SESSION['register_csrf'])) {
     $_SESSION['register_csrf'] = bin2hex(random_bytes(32));
@@ -126,6 +76,7 @@ if (empty($_SESSION['register_csrf'])) {
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $formValues['full_name'] = trim($_POST['full_name'] ?? '');
     $formValues['email'] = trim($_POST['email'] ?? '');
+    $formValues['phone'] = trim($_POST['phone'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirmPassword = $_POST['confirm_password'] ?? '';
     $csrfToken = $_POST['csrf_token'] ?? '';
@@ -144,6 +95,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Please enter a valid email address.';
     }
 
+    if ($formValues['phone'] !== '' && !preg_match('/^\+?[0-9\s()-]{7,20}$/', $formValues['phone'])) {
+        $errors[] = 'Please enter a valid phone number.';
+    }
+
     if (strlen($password) < 6) {
         $errors[] = 'Password must be at least 6 characters long.';
     }
@@ -158,42 +113,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($errors === []) {
         try {
-            ensureUsersTable($pdo);
+            ensureUsersRegistrationSchema($pdo);
 
-            $emailCheck = $pdo->prepare('SELECT 1 FROM users WHERE LOWER(email) = LOWER(:email) LIMIT 1');
+            $emailCheck = $pdo->prepare("
+                SELECT id, email, full_name, is_verified, account_status
+                FROM users
+                WHERE LOWER(email) = LOWER(:email)
+                LIMIT 1
+            ");
             $emailCheck->execute(['email' => $formValues['email']]);
+            $existingUser = $emailCheck->fetch(PDO::FETCH_ASSOC);
 
-            if ($emailCheck->fetchColumn()) {
-                $errors[] = 'An account with that email already exists. Please sign in instead.';
+            if ($existingUser) {
+                if (!empty($existingUser['is_verified']) && ($existingUser['account_status'] ?? 'active') === 'active') {
+                    $errors[] = 'An account with that email already exists. Please sign in instead.';
+                } elseif (($existingUser['account_status'] ?? 'pending') === 'suspended') {
+                    $errors[] = 'This account is suspended. Please contact support.';
+                } else {
+                    session_regenerate_id(true);
+                    setPendingVerificationSession($existingUser);
+                    $_SESSION['flash_success'] = 'Your account is waiting for verification. Enter the code we sent to your email, or request a new one.';
+                    header('Location: verify_code.php');
+                    exit;
+                }
             } else {
                 $username = generateUniqueUsername($pdo, $formValues['full_name'], $formValues['email']);
                 $passwordHash = password_hash($password, PASSWORD_DEFAULT);
 
                 $insertStmt = $pdo->prepare("
-                    INSERT INTO users (username, password, email, full_name, role, is_active, created_at, updated_at)
-                    VALUES (:username, :password, :email, :full_name, 'customer', TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    RETURNING id, username, email, full_name, role
+                    INSERT INTO users (
+                        username,
+                        password,
+                        email,
+                        full_name,
+                        phone,
+                        role,
+                        is_active,
+                        is_verified,
+                        account_status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        :username,
+                        :password,
+                        :email,
+                        :full_name,
+                        :phone,
+                        'customer',
+                        TRUE,
+                        FALSE,
+                        'pending',
+                        CURRENT_TIMESTAMP,
+                        CURRENT_TIMESTAMP
+                    )
+                    RETURNING id, username, email, full_name, role, phone
                 ");
                 $insertStmt->execute([
                     'username' => $username,
                     'password' => $passwordHash,
                     'email' => $formValues['email'],
                     'full_name' => $formValues['full_name'],
+                    'phone' => $formValues['phone'] !== '' ? $formValues['phone'] : null,
                 ]);
                 $newUser = $insertStmt->fetch();
 
                 unset($_SESSION['register_csrf']);
                 session_regenerate_id(true);
-                $_SESSION['user_id'] = $newUser['id'];
-                $_SESSION['username'] = $newUser['username'];
-                $_SESSION['email'] = $newUser['email'];
-                $_SESSION['full_name'] = $newUser['full_name'];
-                $_SESSION['role'] = $newUser['role'];
-                $_SESSION['logged_in'] = true;
-                $_SESSION['login_time'] = time();
-                $_SESSION['flash_success'] = 'Account created successfully. Welcome to your dashboard.';
-                header('Location: customer_dashboard.php');
-                exit;
+                clearPendingVerificationSession();
+                $verificationResult = sendAccountVerificationCode($pdo, $newUser, false);
+
+                if (!$verificationResult['success']) {
+                    setPendingVerificationSession($newUser);
+                    $errors[] = $verificationResult['message'];
+                } else {
+                    $_SESSION['flash_success'] = $verificationResult['message'];
+                    header('Location: verify_code.php');
+                    exit;
+                }
             }
         } catch (PDOException $e) {
             error_log('Registration error: ' . $e->getMessage());
@@ -412,6 +409,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #ffd8d6;
         }
 
+        .alert-success {
+            border: 1px solid rgba(143, 211, 168, 0.35);
+            background: rgba(143, 211, 168, 0.12);
+            color: #d5f5df;
+        }
+
         .alert ul {
             margin: 0;
             padding-left: 1.25rem;
@@ -581,6 +584,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 <?php endif; ?>
 
+                <?php if ($success_message !== ''): ?>
+                    <div class="alert alert-success" role="status">
+                        <?= e($success_message) ?>
+                    </div>
+                <?php endif; ?>
+
                 <form method="post" id="registerForm" novalidate>
                     <input type="hidden" name="csrf_token" value="<?= e($_SESSION['register_csrf']) ?>">
 
@@ -610,6 +619,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 autocomplete="email"
                                 required
                             >
+                        </div>
+
+                        <div class="form-group">
+                            <label for="phone">Phone Number</label>
+                            <input
+                                type="tel"
+                                id="phone"
+                                name="phone"
+                                value="<?= e($formValues['phone']) ?>"
+                                maxlength="20"
+                                autocomplete="tel"
+                                placeholder="+2547XXXXXXXX"
+                            >
+                            <span class="helper-text">Optional, but recommended for order updates and future login security.</span>
                         </div>
 
                         <div class="form-group">
