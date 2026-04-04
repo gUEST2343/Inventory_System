@@ -10,6 +10,7 @@ require_once __DIR__ . '/admin/includes/auth-check.php';
 $page = isset($_GET['page']) ? $_GET['page'] : 'dashboard';
 
 require_once 'db_connect.php';
+require_once __DIR__ . '/includes/settings_helper.php';
 require_once __DIR__ . '/includes/product_image_helper.php';
 
 if (!isset($pdo) || $pdo === null) {
@@ -374,13 +375,190 @@ if (isset($_POST['action'])) {
                 $result = ['success' => true, 'data' => ['supplier' => $supplier, 'products' => $products]];
                 break;
             case 'add_user':
+                $username = trim((string) ($_POST['username'] ?? ''));
+                $email = trim((string) ($_POST['email'] ?? ''));
+                $fullName = trim((string) ($_POST['full_name'] ?? ''));
+                $role = trim((string) ($_POST['role'] ?? 'staff'));
+                $passwordInput = (string) ($_POST['password'] ?? '');
+                $allowedRoles = ['admin', 'manager', 'staff'];
+
+                if ($username === '' || $email === '' || $fullName === '' || $passwordInput === '') {
+                    $result = ['success' => false, 'message' => 'Please complete all required user fields.'];
+                    break;
+                }
+
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    $result = ['success' => false, 'message' => 'Please enter a valid email address.'];
+                    break;
+                }
+
+                if (!in_array($role, $allowedRoles, true)) {
+                    $result = ['success' => false, 'message' => 'Please select a valid user role.'];
+                    break;
+                }
+
                 $stmt = $pdo->prepare("INSERT INTO users (username, password, email, full_name, role) VALUES (?, ?, ?, ?, ?)");
-                $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
-                $stmt->execute([$_POST['username'], $password, $_POST['email'], $_POST['full_name'], $_POST['role']]);
+                $password = password_hash($passwordInput, PASSWORD_DEFAULT);
+                $stmt->execute([$username, $password, $email, $fullName, $role]);
                 $result = ['success' => true, 'message' => 'User added successfully'];
                 break;
+            case 'update_user':
+                $userId = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $username = trim((string) ($_POST['username'] ?? ''));
+                $email = trim((string) ($_POST['email'] ?? ''));
+                $fullName = trim((string) ($_POST['full_name'] ?? ''));
+                $role = trim((string) ($_POST['role'] ?? 'staff'));
+                $passwordInput = trim((string) ($_POST['password'] ?? ''));
+                $isActive = isset($_POST['is_active']) && (string) $_POST['is_active'] === '1';
+                $allowedRoles = ['admin', 'manager', 'staff'];
+                $currentUserId = (int) ($_SESSION['user_id'] ?? 0);
+
+                if ($userId === false || $username === '' || $email === '' || $fullName === '') {
+                    $result = ['success' => false, 'message' => 'Please complete all required user fields.'];
+                    break;
+                }
+
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    $result = ['success' => false, 'message' => 'Please enter a valid email address.'];
+                    break;
+                }
+
+                if (!in_array($role, $allowedRoles, true)) {
+                    $result = ['success' => false, 'message' => 'Please select a valid user role.'];
+                    break;
+                }
+
+                if ($currentUserId > 0 && $currentUserId === $userId && !$isActive) {
+                    $result = ['success' => false, 'message' => 'You cannot deactivate your own account.'];
+                    break;
+                }
+
+                $stmt = $pdo->prepare("SELECT id, role FROM users WHERE id = ?");
+                $stmt->execute([$userId]);
+                $existingUser = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$existingUser) {
+                    $result = ['success' => false, 'message' => 'User not found.'];
+                    break;
+                }
+
+                if (!in_array($existingUser['role'] ?? '', ['admin', 'manager', 'staff'], true)) {
+                    $result = ['success' => false, 'message' => 'Only staff, manager, and admin accounts can be edited here.'];
+                    break;
+                }
+
+                if (($existingUser['role'] ?? '') === 'admin' && $currentUserId > 0 && $currentUserId !== $userId && !$isActive) {
+                    $result = ['success' => false, 'message' => 'Admin users can only be deactivated from their own account controls.'];
+                    break;
+                }
+
+                $fields = ['username = ?', 'email = ?', 'full_name = ?', 'role = ?', 'is_active = ?', 'updated_at = CURRENT_TIMESTAMP'];
+                $params = [$username, $email, $fullName, $role, $isActive];
+
+                if ($passwordInput !== '') {
+                    $fields[] = 'password = ?';
+                    $params[] = password_hash($passwordInput, PASSWORD_DEFAULT);
+                }
+
+                $params[] = $userId;
+                $sql = "UPDATE users SET " . implode(', ', $fields) . " WHERE id = ?";
+                $stmt = $pdo->prepare($sql);
+                $stmt->execute($params);
+
+                $result = ['success' => true, 'message' => 'User updated successfully'];
+                break;
+            case 'delete_user':
+                $userId = filter_var($_POST['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+                $currentUserId = (int) ($_SESSION['user_id'] ?? 0);
+
+                if ($userId === false) {
+                    $result = ['success' => false, 'message' => 'Invalid user selected.'];
+                    break;
+                }
+
+                if ($currentUserId > 0 && $currentUserId === $userId) {
+                    $result = ['success' => false, 'message' => 'You cannot delete your own account.'];
+                    break;
+                }
+
+                $stmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+                $stmt->execute([$userId]);
+                $userToDelete = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if (!$userToDelete) {
+                    $result = ['success' => false, 'message' => 'User not found.'];
+                    break;
+                }
+
+                if (!in_array($userToDelete['role'] ?? '', ['admin', 'manager', 'staff'], true)) {
+                    $result = ['success' => false, 'message' => 'Only staff, manager, and admin accounts can be deleted here.'];
+                    break;
+                }
+
+                if (($userToDelete['role'] ?? '') === 'admin') {
+                    $result = ['success' => false, 'message' => 'Admin users cannot be deleted from this page.'];
+                    break;
+                }
+
+                $stmt = $pdo->prepare("UPDATE users SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+                $stmt->execute([$userId]);
+                $result = ['success' => true, 'message' => 'User deleted successfully'];
+                break;
             case 'save_settings':
-                $result = ['success' => true, 'message' => 'Settings saved successfully'];
+                $savedSettings = saveAppSettings($pdo, [
+                    'store_name' => $_POST['store_name'] ?? '',
+                    'store_email' => $_POST['store_email'] ?? '',
+                    'currency' => $_POST['currency'] ?? '',
+                    'timezone' => $_POST['timezone'] ?? '',
+                    'low_stock_threshold' => $_POST['low_stock_threshold'] ?? '',
+                    'date_format' => $_POST['date_format'] ?? 'Y-m-d',
+                ]);
+                $result = ['success' => true, 'message' => 'General settings saved successfully', 'settings' => $savedSettings];
+                break;
+            case 'save_notification_settings':
+                $savedSettings = saveAppSettings($pdo, [
+                    'notify_new_orders' => $_POST['notify_new_orders'] ?? '0',
+                    'notify_low_stock' => $_POST['notify_low_stock'] ?? '0',
+                    'notify_daily_sales_report' => $_POST['notify_daily_sales_report'] ?? '0',
+                    'notify_weekly_summary' => $_POST['notify_weekly_summary'] ?? '0',
+                    'notify_order_status_changes' => $_POST['notify_order_status_changes'] ?? '0',
+                    'notify_inventory_updates' => $_POST['notify_inventory_updates'] ?? '0',
+                    'notify_user_activity' => $_POST['notify_user_activity'] ?? '0',
+                ]);
+                $result = ['success' => true, 'message' => 'Notification preferences saved successfully', 'settings' => $savedSettings];
+                break;
+            case 'create_settings_backup':
+                $timestamp = date('c');
+                saveAppSettings($pdo, ['last_backup_at' => $timestamp]);
+                $backupPayload = createSettingsBackupPayload($pdo);
+                $filename = 'stockflow-settings-backup-' . date('Y-m-d-His') . '.json';
+                $result = [
+                    'success' => true,
+                    'message' => 'Settings backup created successfully',
+                    'filename' => $filename,
+                    'backup' => $backupPayload,
+                ];
+                break;
+            case 'restore_settings_backup':
+                if (!isset($_FILES['backup_file']) || (int) ($_FILES['backup_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+                    $result = ['success' => false, 'message' => 'Please choose a valid backup file to restore.'];
+                    break;
+                }
+
+                $backupJson = file_get_contents($_FILES['backup_file']['tmp_name']);
+                $backupPayload = json_decode($backupJson ?: '', true);
+
+                if (!is_array($backupPayload)) {
+                    $result = ['success' => false, 'message' => 'The selected backup file is not valid JSON.'];
+                    break;
+                }
+
+                $savedSettings = restoreSettingsBackupPayload($pdo, $backupPayload);
+                $result = [
+                    'success' => true,
+                    'message' => 'Settings backup restored successfully',
+                    'settings' => $savedSettings,
+                ];
                 break;
             default:
                 $result = ['success' => false, 'message' => 'Invalid action'];
@@ -394,6 +572,11 @@ if (isset($_POST['action'])) {
             elseif (stripos($errorMessage, 'products_sku_key') !== false) $friendlyMessage = 'SKU already exists.';
             else $friendlyMessage = 'A record with these details already exists.';
         }
+        $result = ['success' => false, 'message' => $friendlyMessage];
+    } catch (Throwable $e) {
+        $friendlyMessage = trim((string) $e->getMessage()) !== ''
+            ? $e->getMessage()
+            : 'Unable to complete the requested action.';
         $result = ['success' => false, 'message' => $friendlyMessage];
     }
     echo json_encode($result);
