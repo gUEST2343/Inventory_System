@@ -1,7 +1,7 @@
 <?php
 return [
     'smtp_host'     => getenv('MAIL_HOST')         ?: 'smtp.gmail.com',
-    'smtp_port'     => getenv('MAIL_PORT')         ?: 587,
+    'smtp_port'     => getenv('MAIL_PORT')         ?: 25,
     'smtp_secure'   => 'tls',
     'smtp_auth'     => true,
     'smtp_username' => getenv('MAIL_USERNAME')     ?: '',
