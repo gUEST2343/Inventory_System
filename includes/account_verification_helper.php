@@ -111,6 +111,18 @@ if (!function_exists('getVerificationExpiryDateTime')) {
     }
 }
 
+if (!function_exists('isAccountVerified')) {
+    function isAccountVerified(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        $normalized = strtolower(trim((string) $value));
+        return in_array($normalized, ['1', 'true', 't', 'yes', 'y'], true);
+    }
+}
+
 if (!function_exists('formatCountdownSeconds')) {
     function formatCountdownSeconds(int $seconds): int
     {
@@ -214,7 +226,7 @@ if (!function_exists('sendAccountVerificationCode')) {
             return ['success' => false, 'message' => 'Account not found.'];
         }
 
-        if (!empty($currentUser['is_verified'])) {
+        if (isAccountVerified($currentUser['is_verified'])) {
             return ['success' => false, 'message' => 'This account is already verified.', 'already_verified' => true];
         }
 
@@ -318,7 +330,7 @@ if (!function_exists('attemptAccountVerification')) {
             return ['success' => false, 'message' => 'We could not find your pending account. Please register again.'];
         }
 
-        if (!empty($user['is_verified'])) {
+        if (isAccountVerified($user['is_verified'])) {
             return ['success' => false, 'message' => 'This account is already verified.', 'already_verified' => true];
         }
 

@@ -26,7 +26,7 @@ if (!($pdo instanceof PDO)) {
     if ($pendingUserId <= 0) {
         if (!empty($_SESSION['logged_in']) && !empty($_SESSION['user_id'])) {
             $currentUser = fetchVerificationUserById($pdo, (int) $_SESSION['user_id']);
-            if ($currentUser && !empty($currentUser['is_verified'])) {
+            if ($currentUser && isAccountVerified($currentUser['is_verified'])) {
                 header('Location: customer_dashboard.php');
                 exit;
             }
@@ -39,7 +39,7 @@ if (!($pdo instanceof PDO)) {
         if (!$user) {
             clearPendingVerificationSession();
             $errors[] = 'We could not find your pending account. Please register again.';
-        } elseif (!empty($user['is_verified'])) {
+        } elseif (isAccountVerified($user['is_verified'])) {
             clearPendingVerificationSession();
             $_SESSION['flash_success'] = 'Your account is already verified. Please sign in.';
             header('Location: login.php');

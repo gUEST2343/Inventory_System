@@ -2,6 +2,7 @@
 session_start();
 
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/includes/logger.php';
 
 if (isset($_SESSION['user_id']) && !empty($_SESSION['logged_in'])) {
     header('Location: shop.php');
@@ -16,10 +17,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $login = trim($_POST['login'] ?? '');
     $password = $_POST['password'] ?? '';
 
+    Logger::info('Customer login attempt', ['login' => $login, 'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown']);
+
     if ($login === '' || $password === '') {
         $error = 'Please enter both your email or username and password.';
+        Logger::warn('Customer login validation failed - missing fields', ['login' => $login]);
     } elseif (!$pdo instanceof PDO) {
         $error = $db_connection_error ?: 'Database connection is unavailable. Please try again later.';
+        Logger::error('Customer login - DB unavailable', ['error' => $db_connection_error ?? 'unknown']);
     } else {
         try {
             $stmt = $pdo->prepare("
@@ -49,13 +54,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $updateStmt = $pdo->prepare('UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = :id');
                 $updateStmt->execute(['id' => $user['id']]);
 
+                Logger::info('Customer login successful', ['login' => $login, 'user_id' => $user['id']]);
+
                 header('Location: shop.php');
                 exit();
             }
 
             $error = 'Invalid email, username, or password.';
+            Logger::warn('Customer invalid credentials', ['login' => $login, 'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown']);
         } catch (PDOException $e) {
-            error_log('User login error: ' . $e->getMessage());
+            Logger::error('User login PDOException', ['message' => $e->getMessage()]);
             $error = 'Unable to sign you in right now. Please try again later.';
         }
     }

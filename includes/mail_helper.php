@@ -219,5 +219,72 @@ class MailHelper
         }
     }
 
-    // ... existing sendVerificationEmail, sendRegistrationVerificationCode, sendOrderConfirmation ...
+    public function sendVerificationEmail(string $to, string $name, string $code, \DateTimeInterface $expiry, string $verifyUrl): array
+    {
+        $subject = 'Verify your Inventory System account';
+        $htmlBody = sprintf(
+            '<h1>Verify your account</h1><p>Hi %s,</p><p>Your verification code is <strong>%s</strong>.</p><p>This code expires at %s.</p><p><a href="%s">Click here to verify your account</a>.</p><p>If you did not request this verification, please ignore this email.</p>',
+            htmlspecialchars($name, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($code, ENT_QUOTES, 'UTF-8'),
+            $expiry->format('Y-m-d H:i'),
+            htmlspecialchars($verifyUrl, ENT_QUOTES, 'UTF-8')
+        );
+        $altBody = sprintf(
+            "Hello %s,
+
+Your verification code is %s.
+This code expires at %s.
+
+Visit %s to verify your account.
+
+If you did not request this verification, please ignore this email.",
+            $name,
+            $code,
+            $expiry->format('Y-m-d H:i'),
+            $verifyUrl
+        );
+
+        return $this->sendEmail($to, $subject, $htmlBody, $altBody);
+    }
+
+    public function sendRegistrationVerificationCode(string $to, string $name, string $code, \DateTimeInterface $expiry, string $verifyUrl): array
+    {
+        return $this->sendVerificationEmail($to, $name, $code, $expiry, $verifyUrl);
+    }
+
+    public function sendOrderConfirmation(string $to, string $name, array $orderDetails): array
+    {
+        $orderNumber = $orderDetails['order_number'] ?? 'N/A';
+        $subject = sprintf('Order Confirmation #%s', $orderNumber);
+        $status = $orderDetails['status'] ?? 'Pending';
+        $date = $orderDetails['date'] ?? date('Y-m-d H:i');
+        $total = $orderDetails['total'] ?? '0.00';
+
+        $htmlBody = sprintf(
+            '<h1>Order Confirmation</h1><p>Hi %s,</p><p>Thank you for your order. Here are the details:</p><ul><li><strong>Order Number:</strong> %s</li><li><strong>Date:</strong> %s</li><li><strong>Total:</strong> $%s</li><li><strong>Status:</strong> %s</li></ul><p>We will notify you once your order ships.</p>',
+            htmlspecialchars($name, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($orderNumber, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($date, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($total, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($status, ENT_QUOTES, 'UTF-8')
+        );
+        $altBody = sprintf(
+            "Hello %s,
+
+Thank you for your order.
+Order Number: %s
+Date: %s
+Total: $%s
+Status: %s
+
+We will notify you once your order ships.",
+            $name,
+            $orderNumber,
+            $date,
+            $total,
+            $status
+        );
+
+        return $this->sendEmail($to, $subject, $htmlBody, $altBody);
+    }
 }
