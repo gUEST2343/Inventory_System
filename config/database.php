@@ -67,7 +67,7 @@ $dbUser = (string) getDbEnvVar('DB_USER', 'DB_USERNAME', 'postgres');
 $dbPassword = getenv('DB_PASSWORD');
 if ($dbPassword === false || $dbPassword === null) {
     $dbPassword = in_array($dbHost, ['localhost', '127.0.0.1', '::1'], true)
-        ? 'admin123'
+        ? 'Root'
         : '';
 }
 

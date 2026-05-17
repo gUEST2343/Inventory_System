@@ -111,18 +111,6 @@ if (!function_exists('getVerificationExpiryDateTime')) {
     }
 }
 
-if (!function_exists('isAccountVerified')) {
-    function isAccountVerified(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        $normalized = strtolower(trim((string) $value));
-        return in_array($normalized, ['1', 'true', 't', 'yes', 'y'], true);
-    }
-}
-
 if (!function_exists('formatCountdownSeconds')) {
     function formatCountdownSeconds(int $seconds): int
     {
