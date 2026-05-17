@@ -35,7 +35,13 @@ try {
             $port     = getenv('DB_PORT')     ?: getenv('PGPORT')     ?: '5432';
             $dbname   = getenv('DB_NAME')     ?: getenv('PGDATABASE') ?: getenv('DB_DATABASE') ?: 'Inventory_DB';
             $user     = getenv('DB_USER')     ?: getenv('PGUSER')     ?: getenv('DB_USERNAME') ?: 'postgres';
-            $password = getenv('DB_PASSWORD') ?: getenv('PGPASSWORD') ?: '';
+            $password = getenv('DB_PASSWORD') ?: getenv('PGPASSWORD');
+            if ($password === false || $password === null) {
+                // Local development fallback for PostgreSQL on localhost
+                $password = in_array($host, ['localhost', '127.0.0.1', '::1'], true)
+                    ? 'admin123'
+                    : '';
+            }
 
             $dsn = "pgsql:host={$host};port={$port};dbname={$dbname}";
 
