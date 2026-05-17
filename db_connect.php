@@ -79,7 +79,8 @@ try {
 } catch (PDOException $e) {
     $pdo = null;
     $db_connection_failed = true;
-    $db_connection_error  = 'Database connection failed. Confirm PostgreSQL is running and your credentials are correct.';
+    // Surface a helpful error message for debugging while still logging the full exception.
+    $db_connection_error = 'Database connection failed: ' . $e->getMessage();
     error_log("PostgreSQL Connection Error: " . $e->getMessage());
 }
 
