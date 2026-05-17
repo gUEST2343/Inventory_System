@@ -39,7 +39,7 @@ try {
             if ($password === false || $password === null) {
                 // Local development fallback for PostgreSQL on localhost
                 $password = in_array($host, ['localhost', '127.0.0.1', '::1'], true)
-                    ? 'admin123'
+                    ? 'Root'
                     : '';
             }
 
