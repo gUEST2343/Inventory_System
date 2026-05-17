@@ -7,25 +7,27 @@ use PHPMailer\PHPMailer\SMTP;
 
 $mailAutoloadPath = __DIR__ . '/../vendor/autoload.php';
 
-// Load Composer dependencies only when the autoloader actually exists.
 if (file_exists($mailAutoloadPath)) {
     require_once $mailAutoloadPath;
+}
+
+if (!class_exists('PHPMailer\\PHPMailer\\PHPMailer') && file_exists(__DIR__ . '/phpmailer_shim.php')) {
+    require_once __DIR__ . '/phpmailer_shim.php';
 }
 
 require_once __DIR__ . '/../config/mail.php';
 
 class MailHelper
 {
-    private $mail = null;
-    private $config = [];
-    private $available = false;
-    private $initializationError = '';
+    private ?PHPMailer $mail = null;
+    private array $config = [];
+    private bool $available = false;
+    private string $initializationError = '';
 
     public function __construct()
     {
         $this->config = require __DIR__ . '/../config/mail.php';
 
-        // Fail gracefully when PHPMailer is not installed instead of causing a fatal error.
         if (!class_exists(PHPMailer::class)) {
             $this->initializationError = 'PHPMailer is not installed. Run composer install to enable email sending.';
             error_log($this->initializationError);
@@ -69,161 +71,220 @@ class MailHelper
         return $this->initializationError;
     }
 
-    public function sendEmail($to, $subject, $htmlBody, $altBody = '')
+    /**
+     * Send an email using PHPMailer, SMTP socket fallback, or PHP mail().
+     *
+     * @param string $to
+     * @param string $subject
+     * @param string $htmlBody
+     * @param string $altBody
+     * @return array{success: bool, message: string}
+     */
+    public function sendEmail(string $to, string $subject, string $htmlBody, string $altBody = ''): array
     {
-        if (!$this->available || !$this->mail instanceof PHPMailer) {
-            $headers = [
-                'MIME-Version: 1.0',
-                'Content-type: text/html; charset=UTF-8',
-                'From: ' . $this->config['from_name'] . ' <' . $this->config['from_email'] . '>',
-                'Reply-To: ' . $this->config['reply_to'],
-            ];
+        if ($this->available && $this->mail instanceof PHPMailer) {
+            try {
+                $this->mail->clearAddresses();
+                $this->mail->addAddress($to);
+                $this->mail->Subject = $subject;
+                $this->mail->Body = $htmlBody;
+                $this->mail->AltBody = $altBody ?: strip_tags($htmlBody);
+                $this->mail->send();
 
-            $sent = @mail($to, $subject, $htmlBody, implode("\r\n", $headers));
-            if ($sent) {
-                return ['success' => true, 'message' => 'Email sent successfully using the server mail function.'];
+                return ['success' => true, 'message' => 'Email sent successfully'];
+            } catch (Exception $e) {
+                error_log('Mailer Error: ' . $this->mail->ErrorInfo . ' | ' . $e->getMessage());
+                $this->initializationError = $this->mail->ErrorInfo ?: $e->getMessage();
             }
-
-            return [
-                'success' => false,
-                'message' => $this->initializationError !== '' ? $this->initializationError : 'Email service is not available on this server yet.',
-            ];
         }
+
+        if ($this->sendEmailViaSmtpSocket($to, $subject, $htmlBody, $altBody)) {
+            return ['success' => true, 'message' => 'Email sent successfully using SMTP fallback'];
+        }
+
+        $headers = [
+            'MIME-Version: 1.0',
+            'Content-type: text/html; charset=UTF-8',
+            'From: ' . $this->config['from_name'] . ' <' . $this->config['from_email'] . '>',
+            'Reply-To: ' . $this->config['reply_to'],
+        ];
+
+        $sent = @mail($to, $subject, $htmlBody, implode("\r\n", $headers));
+        if ($sent) {
+            return ['success' => true, 'message' => 'Email sent successfully using the server mail() function.'];
+        }
+
+        return [
+            'success' => false,
+            'message' => $this->initializationError !== '' ? $this->initializationError : 'Email service is not available on this server yet.'
+        ];
+    }
+
+    private function sendEmailViaSmtpSocket(string $to, string $subject, string $htmlBody, string $altBody = ''): bool
+    {
+        if (empty($this->config['smtp_host']) || empty($this->config['smtp_port'])) {
+            return false;
+        }
+
+        $host = $this->config['smtp_host'];
+        $port = (int)$this->config['smtp_port'];
+        $security = strtolower($this->config['smtp_secure'] ?? '');
+        $transportHost = $security === 'ssl' ? 'ssl://' . $host : $host;
+
+        $socket = @fsockopen($transportHost, $port, $errno, $errstr, 30);
+        if (!$socket) {
+            error_log("SMTP fallback connect failed: {$errno} {$errstr}");
+            return false;
+        }
+
+        stream_set_timeout($socket, 30);
 
         try {
-            $this->mail->clearAddresses();
-            $this->mail->addAddress($to);
-            $this->mail->Subject = $subject;
-            $this->mail->Body = $htmlBody;
-            $this->mail->AltBody = $altBody ?: strip_tags($htmlBody);
+            $this->expectSmtpResponse($socket, 220);
 
-            $this->mail->send();
-            return ['success' => true, 'message' => 'Email sent successfully'];
-        } catch (Exception $e) {
-            error_log('Mailer Error: ' . $this->mail->ErrorInfo);
-            return ['success' => false, 'message' => $this->mail->ErrorInfo];
+            $hostName = $_SERVER['HTTP_HOST'] ?? 'localhost';
+            fwrite($socket, "EHLO {$hostName}\r\n");
+            $this->expectSmtpResponse($socket, 250);
+
+            if ($security === 'tls' || $security === 'starttls') {
+                fwrite($socket, "STARTTLS\r\n");
+                $this->expectSmtpResponse($socket, 220);
+                stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+                fwrite($socket, "EHLO {$hostName}\r\n");
+                $this->expectSmtpResponse($socket, 250);
+            }
+
+            if (!empty($this->config['smtp_auth'])) {
+                fwrite($socket, "AUTH LOGIN\r\n");
+                $this->expectSmtpResponse($socket, 334);
+                fwrite($socket, base64_encode($this->config['smtp_username']) . "\r\n");
+                $this->expectSmtpResponse($socket, 334);
+                fwrite($socket, base64_encode($this->config['smtp_password']) . "\r\n");
+                $this->expectSmtpResponse($socket, 235);
+            }
+
+            fwrite($socket, "MAIL FROM:<{$this->config['from_email']}>\r\n");
+            $this->expectSmtpResponse($socket, 250);
+
+            fwrite($socket, "RCPT TO:<{$to}>\r\n");
+            $this->expectSmtpResponse($socket, 250);
+
+            fwrite($socket, "DATA\r\n");
+            $this->expectSmtpResponse($socket, 354);
+
+            $headers = [
+                "From: {$this->config['from_name']} <{$this->config['from_email']}>",
+                "Reply-To: {$this->config['reply_to']}",
+                "MIME-Version: 1.0",
+                "Content-Type: text/html; charset=UTF-8",
+                "Subject: {$subject}",
+                'Date: ' . date('r'),
+            ];
+
+            $message = implode("\r\n", $headers) . "\r\n\r\n" . $htmlBody;
+            fwrite($socket, $message . "\r\n.\r\n");
+            $this->expectSmtpResponse($socket, 250);
+
+            fwrite($socket, "QUIT\r\n");
+            fclose($socket);
+
+            return true;
+        } catch (\RuntimeException $e) {
+            error_log('SMTP fallback error: ' . $e->getMessage());
+            fclose($socket);
+            return false;
         }
     }
 
-    public function sendVerificationEmail($email, $username, $token)
+    /**
+     * Read SMTP response lines from the socket and validate status code.
+     *
+     * @param resource $socket
+     * @param int $expectedCode
+     * @return void
+     * @throws \RuntimeException
+     */
+    private function expectSmtpResponse($socket, int $expectedCode): void
     {
-        $verificationLink = 'http://' . $_SERVER['HTTP_HOST'] . '/verify.php?token=' . $token;
+        $response = '';
+        while (($line = fgets($socket, 515)) !== false) {
+            $response .= $line;
+            if (substr($line, 3, 1) === ' ') {
+                break;
+            }
+        }
 
-        $htmlBody = "
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; }
-                .container { max-width: 600px; margin: 0 auto; padding: 20px; }
-                .header { background: #4CAF50; color: white; padding: 10px; text-align: center; }
-                .button {
-                    display: inline-block;
-                    padding: 10px 20px;
-                    background: #4CAF50;
-                    color: white;
-                    text-decoration: none;
-                    border-radius: 5px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class='container'>
-                <div class='header'>
-                    <h2>Email Verification</h2>
-                </div>
-                <p>Hello {$username},</p>
-                <p>Thank you for registering! Please verify your email address by clicking the button below:</p>
-                <p style='text-align: center;'>
-                    <a href='{$verificationLink}' class='button'>Verify Email Address</a>
-                </p>
-                <p>If the button doesn't work, copy and paste this link:</p>
-                <p>{$verificationLink}</p>
-                <p>This link will expire in 24 hours.</p>
-            </div>
-        </body>
-        </html>";
-
-        return $this->sendEmail($email, 'Verify Your Email Address', $htmlBody);
+        if ((int)substr($response, 0, 3) !== $expectedCode) {
+            throw new \RuntimeException('SMTP error: ' . trim($response));
+        }
     }
 
-    public function sendRegistrationVerificationCode(string $email, string $fullName, string $code, DateTimeInterface $expiry, string $verifyUrl)
+    public function sendVerificationEmail(string $to, string $name, string $code, \DateTimeInterface $expiry, string $verifyUrl): array
     {
-        $safeName = htmlspecialchars($fullName, ENT_QUOTES, 'UTF-8');
-        $safeCode = htmlspecialchars($code, ENT_QUOTES, 'UTF-8');
-        $safeUrl = htmlspecialchars($verifyUrl, ENT_QUOTES, 'UTF-8');
-        $expiryLabel = htmlspecialchars($expiry->format('M j, Y g:i A'), ENT_QUOTES, 'UTF-8');
+        $subject = 'Verify your Inventory System account';
+        $htmlBody = sprintf(
+            '<h1>Verify your account</h1><p>Hi %s,</p><p>Your verification code is <strong>%s</strong>.</p><p>This code expires at %s.</p><p><a href="%s">Click here to verify your account</a>.</p><p>If you did not request this verification, please ignore this email.</p>',
+            htmlspecialchars($name, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($code, ENT_QUOTES, 'UTF-8'),
+            $expiry->format('Y-m-d H:i'),
+            htmlspecialchars($verifyUrl, ENT_QUOTES, 'UTF-8')
+        );
+        $altBody = sprintf(
+            "Hello %s,
 
-        $htmlBody = "
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset='UTF-8'>
-            <style>
-                body { font-family: Arial, sans-serif; line-height: 1.6; color: #1f2937; background: #f8fafc; margin: 0; padding: 24px; }
-                .card { max-width: 620px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 18px; overflow: hidden; }
-                .header { background: linear-gradient(135deg, #c78b2a, #e3b766); color: #fff; padding: 24px 28px; }
-                .content { padding: 28px; }
-                .code { font-size: 34px; letter-spacing: 10px; font-weight: 700; text-align: center; color: #111827; background: #fff7e6; border: 1px dashed #e3b766; border-radius: 14px; padding: 18px; margin: 24px 0; }
-                .button { display: inline-block; padding: 12px 18px; background: #111827; color: #fff !important; text-decoration: none; border-radius: 10px; font-weight: 600; }
-                .footer { font-size: 13px; color: #6b7280; margin-top: 20px; }
-            </style>
-        </head>
-        <body>
-            <div class='card'>
-                <div class='header'>
-                    <h2 style='margin:0;'>Verify your account</h2>
-                </div>
-                <div class='content'>
-                    <p>Hello {$safeName},</p>
-                    <p>Thanks for registering. Use the verification code below to activate your account.</p>
-                    <div class='code'>{$safeCode}</div>
-                    <p>This code expires at <strong>{$expiryLabel}</strong> and is valid for 15 minutes.</p>
-                    <p><a href='{$safeUrl}' class='button'>Open verification page</a></p>
-                    <p>If the button does not work, open this link in your browser:</p>
-                    <p><a href='{$safeUrl}'>{$safeUrl}</a></p>
-                    <div class='footer'>
-                        If you did not create this account, you can safely ignore this email.
-                    </div>
-                </div>
-            </div>
-        </body>
-        </html>";
+Your verification code is %s.
+This code expires at %s.
 
-        $altBody = "Hello {$fullName},\n\nYour verification code is {$code}.\nIt expires at {$expiry->format('Y-m-d H:i:s')}.\nVerify here: {$verifyUrl}\n";
+Visit %s to verify your account.
 
-        return $this->sendEmail($email, 'Your verification code', $htmlBody, $altBody);
+If you did not request this verification, please ignore this email.",
+            $name,
+            $code,
+            $expiry->format('Y-m-d H:i'),
+            $verifyUrl
+        );
+
+        return $this->sendEmail($to, $subject, $htmlBody, $altBody);
     }
 
-    public function sendOrderConfirmation($email, $username, $orderDetails)
+    public function sendRegistrationVerificationCode(string $to, string $name, string $code, \DateTimeInterface $expiry, string $verifyUrl): array
     {
-        $htmlBody = "
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <style>
-                body { font-family: Arial, sans-serif; }
-                .order-details { background: #f9f9f9; padding: 15px; border-radius: 5px; }
-                table { width: 100%; border-collapse: collapse; }
-                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-            </style>
-        </head>
-        <body>
-            <h2>Order Confirmation</h2>
-            <p>Thank you for your order, {$username}!</p>
-            <div class='order-details'>
-                <h3>Order #{$orderDetails['order_number']}</h3>
-                <p><strong>Date:</strong> {$orderDetails['date']}</p>
-                <p><strong>Total:</strong> \${$orderDetails['total']}</p>
-                <p><strong>Status:</strong> {$orderDetails['status']}</p>
-            </div>
-            <p>We'll notify you when your order ships.</p>
-        </body>
-        </html>";
+        return $this->sendVerificationEmail($to, $name, $code, $expiry, $verifyUrl);
+    }
 
-        return $this->sendEmail($email, 'Order Confirmation #' . $orderDetails['order_number'], $htmlBody);
+    public function sendOrderConfirmation(string $to, string $name, array $orderDetails): array
+    {
+        $orderNumber = $orderDetails['order_number'] ?? 'N/A';
+        $subject = sprintf('Order Confirmation #%s', $orderNumber);
+        $status = $orderDetails['status'] ?? 'Pending';
+        $date = $orderDetails['date'] ?? date('Y-m-d H:i');
+        $total = $orderDetails['total'] ?? '0.00';
+
+        $htmlBody = sprintf(
+            '<h1>Order Confirmation</h1><p>Hi %s,</p><p>Thank you for your order. Here are the details:</p><ul><li><strong>Order Number:</strong> %s</li><li><strong>Date:</strong> %s</li><li><strong>Total:</strong> $%s</li><li><strong>Status:</strong> %s</li></ul><p>We will notify you once your order ships.</p>',
+            htmlspecialchars($name, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($orderNumber, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($date, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($total, ENT_QUOTES, 'UTF-8'),
+            htmlspecialchars($status, ENT_QUOTES, 'UTF-8')
+        );
+        $altBody = sprintf(
+            "Hello %s,
+
+Thank you for your order.
+Order Number: %s
+Date: %s
+Total: $%s
+Status: %s
+
+We will notify you once your order ships.",
+            $name,
+            $orderNumber,
+            $date,
+            $total,
+            $status
+        );
+
+        return $this->sendEmail($to, $subject, $htmlBody, $altBody);
     }
 }
-
-// Preserve the shared helper instance for any legacy includes that still expect it.
-$mailHelper = new MailHelper();

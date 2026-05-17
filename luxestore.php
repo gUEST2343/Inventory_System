@@ -1,5 +1,4 @@
 ﻿<?php
-session_start();
 
 $year = date('Y');
 $contact_name = "James";

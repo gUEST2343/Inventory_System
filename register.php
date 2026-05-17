@@ -125,7 +125,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $existingUser = $emailCheck->fetch(PDO::FETCH_ASSOC);
 
             if ($existingUser) {
-                if (!empty($existingUser['is_verified']) && ($existingUser['account_status'] ?? 'active') === 'active') {
+                if (isAccountVerified($existingUser['is_verified']) && ($existingUser['account_status'] ?? 'active') === 'active') {
                     $errors[] = 'An account with that email already exists. Please sign in instead.';
                 } elseif (($existingUser['account_status'] ?? 'pending') === 'suspended') {
                     $errors[] = 'This account is suspended. Please contact support.';

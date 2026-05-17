@@ -1,70 +1,54 @@
 <?php
 /**
- * Database Setup Script - Fixed Version
- * This script creates the database and imports the SQL file for PostgreSQL
- * 
- * Run this in your browser: http://localhost/inventory-system/setup.php
+ * Database Setup Script - Render Compatible Version
+ * Run once then DELETE immediately
  */
 
-// Enable error reporting
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-echo "<h1>Inventory System - Database Setup (PostgreSQL)</h1>";
-echo "<pre style='background: #f5f5f5; padding: 15px; border-radius: 5px;'>";
+echo "<h1>Inventory System - Database Setup</h1>";
+echo "<pre style='background:#f5f5f5;padding:15px;border-radius:5px;font-size:14px;'>";
 
-// Database configuration
-$host = 'localhost';
-$port = '5432';
-$username = 'postgres';
-$password = 'Root';
-$dbname = 'Inventory_DB';
+// ── Read credentials from Render environment
+$databaseUrl = getenv('DATABASE_URL');
+
+if ($databaseUrl) {
+    $parsed   = parse_url($databaseUrl);
+    $host     = $parsed['host'];
+    $port     = $parsed['port'] ?? 5432;
+    $dbname   = ltrim($parsed['path'], '/');
+    $username = $parsed['user'];
+    $password = $parsed['pass'];
+    echo "✓ Using DATABASE_URL from environment\n\n";
+} else {
+    $host     = getenv('DB_HOST')     ?: 'localhost';
+    $port     = getenv('DB_PORT')     ?: '5432';
+    $dbname   = getenv('DB_NAME')     ?: getenv('DB_DATABASE') ?: 'Inventory_DB';
+    $username = getenv('DB_USER')     ?: getenv('DB_USERNAME') ?: 'postgres';
+    $password = getenv('DB_PASSWORD') ?: 'Root';
+    echo "✓ Using individual DB env vars\n\n";
+}
 
 echo "Configuration:\n";
-echo "  Host: $host\n";
-echo "  Port: $port\n";
+echo "  Host:     $host\n";
+echo "  Port:     $port\n";
 echo "  Database: $dbname\n";
 echo "  Username: $username\n\n";
 
 try {
-    // Connect to PostgreSQL server (without database)
-    echo "Step 1: Connecting to PostgreSQL server...\n";
-    $dsn = "pgsql:host={$host};port={$port};dbname=postgres";
+    // ── Single DSN - connects directly to the database
+    echo "Step 1: Connecting to database...\n";
+    $dsn = "pgsql:host={$host};port={$port};dbname={$dbname}";
     $pdo = new PDO($dsn, $username, $password, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
     ]);
-    echo "✓ Connected to PostgreSQL server successfully!\n\n";
-    
-    // Check if database exists, if not create it
-    echo "Step 2: Checking database '$dbname'...\n";
-    $stmt = $pdo->query("SELECT 1 FROM pg_database WHERE datname = '$dbname'");
-    $exists = $stmt->fetch();
-    
-    if (!$exists) {
-        $pdo->exec("CREATE DATABASE \"$dbname\" ENCODING 'UTF8'");
-        echo "✓ Database '$dbname' created successfully!\n\n";
-    } else {
-        echo "✓ Database '$dbname' already exists!\n\n";
-    }
-    
-    // Close connection and connect to the new database
-    $pdo = null;
-    echo "Step 3: Connecting to database '$dbname'...\n";
-    $dsn = "pgsql:host={$host};port={$port};dbname=$dbname";
-    $pdo = new PDO($dsn, $username, $password, [
-        PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-    ]);
-    
-    // Set schema to public
     $pdo->exec("SET search_path TO public");
-    echo "✓ Connected to database '$dbname'!\n\n";
-    
-    // Create tables manually with proper SQL
-    echo "Step 4: Creating tables...\n\n";
-    
-    // Users table
+    echo "✓ Connected successfully!\n\n";
+
+    // ── USERS TABLE
+    echo "Step 2: Creating tables...\n\n";
     echo "Creating users table...\n";
     $pdo->exec("CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -74,14 +58,24 @@ try {
         full_name VARCHAR(100) NOT NULL,
         phone VARCHAR(20),
         customer_group VARCHAR(50) DEFAULT 'regular',
-        role VARCHAR(20) DEFAULT 'staff' CHECK (role IN ('admin', 'manager', 'staff', 'customer')),
+        role VARCHAR(20) DEFAULT 'staff'
+            CHECK (role IN ('admin','manager','staff','customer')),
         is_active BOOLEAN DEFAULT true,
+        is_verified BOOLEAN DEFAULT false,
+        account_status VARCHAR(20) DEFAULT 'pending',
+        verification_code VARCHAR(10),
+        verification_code_expires_at TIMESTAMP,
+        verification_attempts INTEGER DEFAULT 0,
+        verification_failed_attempts INTEGER DEFAULT 0,
+        verification_resend_count INTEGER DEFAULT 0,
+        resend_count INTEGER DEFAULT 0,
+        code_expiry TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
     echo "✓ users table created\n";
-    
-    // Categories table
+
+    // ── CATEGORIES TABLE
     echo "Creating categories table...\n";
     $pdo->exec("CREATE TABLE IF NOT EXISTS categories (
         id SERIAL PRIMARY KEY,
@@ -93,8 +87,8 @@ try {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
     echo "✓ categories table created\n";
-    
-    // Products table
+
+    // ── PRODUCTS TABLE
     echo "Creating products table...\n";
     $pdo->exec("CREATE TABLE IF NOT EXISTS products (
         id SERIAL PRIMARY KEY,
@@ -102,24 +96,81 @@ try {
         barcode VARCHAR(50),
         name VARCHAR(200) NOT NULL,
         description TEXT,
-        category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE RESTRICT,
-        unit_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-        cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+        category_id INTEGER REFERENCES categories(id) ON DELETE RESTRICT,
+        unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        cost_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
         quantity INTEGER NOT NULL DEFAULT 0,
         reorder_level INTEGER NOT NULL DEFAULT 10,
         is_active BOOLEAN DEFAULT true,
+        image_path VARCHAR(500),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
     echo "✓ products table created\n";
-    
-    // Stock logs table
+
+    // ── ORDERS TABLE
+    echo "Creating orders table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS orders (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id),
+        order_number VARCHAR(50),
+        customer_name VARCHAR(100),
+        customer_email VARCHAR(100),
+        status VARCHAR(20) DEFAULT 'pending',
+        payment_status VARCHAR(20) DEFAULT 'pending',
+        payment_method VARCHAR(50),
+        transaction_id VARCHAR(100),
+        total_amount DECIMAL(10,2) DEFAULT 0.00,
+        shipping_address TEXT,
+        billing_address TEXT,
+        notes TEXT,
+        order_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ orders table created\n";
+
+    // ── ORDER ITEMS TABLE
+    echo "Creating order_items table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS order_items (
+        id SERIAL PRIMARY KEY,
+        order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        product_id INTEGER REFERENCES products(id),
+        product_name VARCHAR(200),
+        quantity INTEGER NOT NULL DEFAULT 1,
+        unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        price DECIMAL(10,2) DEFAULT 0.00,
+        subtotal DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ order_items table created\n";
+
+    // ── PAYMENT TRANSACTIONS TABLE
+    echo "Creating payment_transactions table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS payment_transactions (
+        id SERIAL PRIMARY KEY,
+        order_id INTEGER REFERENCES orders(id),
+        transaction_id VARCHAR(100),
+        payment_gateway VARCHAR(50) DEFAULT 'manual',
+        payment_method VARCHAR(50),
+        amount DECIMAL(10,2),
+        status VARCHAR(20) DEFAULT 'pending',
+        reference_number VARCHAR(100),
+        checkout_request_id VARCHAR(100),
+        gateway_response TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ payment_transactions table created\n";
+
+    // ── STOCK LOGS TABLE
     echo "Creating stock_logs table...\n";
     $pdo->exec("CREATE TABLE IF NOT EXISTS stock_logs (
         id SERIAL PRIMARY KEY,
         product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-        action VARCHAR(20) NOT NULL CHECK (action IN ('add', 'remove', 'adjust', 'sale', 'return', 'transfer')),
+        action VARCHAR(20) NOT NULL
+            CHECK (action IN ('add','remove','adjust','sale','return','transfer')),
         quantity_before INTEGER NOT NULL,
         quantity_after INTEGER NOT NULL,
         quantity_changed INTEGER NOT NULL,
@@ -129,163 +180,204 @@ try {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )");
     echo "✓ stock_logs table created\n";
-    
-    $pdo->exec("ALTER TABLE stock_logs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
-    
-    // Create indexes
+
+    // ── SUPPLIERS TABLE
+    echo "Creating suppliers table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS suppliers (
+        id SERIAL PRIMARY KEY,
+        company_name VARCHAR(200) NOT NULL,
+        contact_person VARCHAR(100),
+        email VARCHAR(100),
+        phone VARCHAR(20),
+        address TEXT,
+        city VARCHAR(100),
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ suppliers table created\n";
+
+    // ── APP SETTINGS TABLE
+    echo "Creating app_settings table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS app_settings (
+        id SERIAL PRIMARY KEY,
+        setting_key VARCHAR(100) UNIQUE NOT NULL,
+        setting_value TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ app_settings table created\n";
+
+    // ── ADMIN USERS TABLE (separate admin panel)
+    echo "Creating admin_users table...\n";
+    $pdo->exec("CREATE TABLE IF NOT EXISTS admin_users (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password_hash VARCHAR(255) NOT NULL,
+        email VARCHAR(100) UNIQUE NOT NULL,
+        role VARCHAR(20) DEFAULT 'admin',
+        last_login TIMESTAMP,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )");
+    echo "✓ admin_users table created\n";
+
+    // ── INDEXES
     echo "\nCreating indexes...\n";
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_username ON users(username)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_email ON users(email)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_role ON users(role)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_name ON categories(name)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_parent ON categories(parent_id)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_sku ON products(sku)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_barcode ON products(barcode)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_category ON products(category_id)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_quantity ON products(quantity)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_product ON stock_logs(product_id)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_user ON stock_logs(user_id)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_action ON stock_logs(action)");
-    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_created ON stock_logs(created_at)");
+    $indexes = [
+        "CREATE INDEX IF NOT EXISTS idx_username ON users(username)",
+        "CREATE INDEX IF NOT EXISTS idx_email ON users(email)",
+        "CREATE INDEX IF NOT EXISTS idx_role ON users(role)",
+        "CREATE INDEX IF NOT EXISTS idx_sku ON products(sku)",
+        "CREATE INDEX IF NOT EXISTS idx_category ON products(category_id)",
+        "CREATE INDEX IF NOT EXISTS idx_quantity ON products(quantity)",
+        "CREATE INDEX IF NOT EXISTS idx_product_log ON stock_logs(product_id)",
+        "CREATE INDEX IF NOT EXISTS idx_order_user ON orders(user_id)",
+        "CREATE INDEX IF NOT EXISTS idx_order_status ON orders(status)",
+        "CREATE INDEX IF NOT EXISTS idx_payment_order ON payment_transactions(order_id)",
+    ];
+    foreach ($indexes as $sql) {
+        $pdo->exec($sql);
+    }
     echo "✓ Indexes created\n";
-    
-    // Create trigger function
-    echo "\nCreating trigger function...\n";
+
+    // ── TRIGGERS
+    echo "\nCreating triggers...\n";
     $pdo->exec("CREATE OR REPLACE FUNCTION update_updated_at_column()
-    RETURNS TRIGGER AS \$\$
-    BEGIN
-        NEW.updated_at = CURRENT_TIMESTAMP;
-        RETURN NEW;
-    END;
-    \$\$ language 'plpgsql'");
-    echo "✓ Trigger function created\n";
-    
-    // Recreate triggers so setup can be run multiple times safely
-    echo "Creating triggers...\n";
-    $pdo->exec("DROP TRIGGER IF EXISTS update_users_updated_at ON users");
-    $pdo->exec("DROP TRIGGER IF EXISTS update_categories_updated_at ON categories");
-    $pdo->exec("DROP TRIGGER IF EXISTS update_products_updated_at ON products");
-    $pdo->exec("DROP TRIGGER IF EXISTS update_stock_logs_updated_at ON stock_logs");
-    $pdo->exec("CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()");
-    $pdo->exec("CREATE TRIGGER update_categories_updated_at BEFORE UPDATE ON categories FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()");
-    $pdo->exec("CREATE TRIGGER update_products_updated_at BEFORE UPDATE ON products FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()");
-    $pdo->exec("CREATE TRIGGER update_stock_logs_updated_at BEFORE UPDATE ON stock_logs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()");
+        RETURNS TRIGGER AS \$\$
+        BEGIN
+            NEW.updated_at = CURRENT_TIMESTAMP;
+            RETURN NEW;
+        END;
+        \$\$ language 'plpgsql'");
+
+    $triggerTables = [
+        'users', 'categories', 'products', 'orders',
+        'stock_logs', 'suppliers', 'app_settings',
+        'payment_transactions', 'admin_users'
+    ];
+    foreach ($triggerTables as $t) {
+        $pdo->exec("DROP TRIGGER IF EXISTS update_{$t}_updated_at ON {$t}");
+        $pdo->exec("CREATE TRIGGER update_{$t}_updated_at
+            BEFORE UPDATE ON {$t}
+            FOR EACH ROW EXECUTE FUNCTION update_updated_at_column()");
+    }
     echo "✓ Triggers created\n";
-    
-    // Insert admin user
-    echo "\nStep 5: Inserting admin user...\n";
-    $password_hash = password_hash('admin123', PASSWORD_DEFAULT);
-    $pdo->exec("INSERT INTO users (username, password, email, full_name, role) VALUES ('admin', '$password_hash', 'admin@inventorysystem.com', 'System Administrator', 'admin') ON CONFLICT (username) DO NOTHING");
-    echo "✓ Admin user created (username: admin, password: admin123)\n";
-    
-    // Insert sample categories
-    echo "\nStep 6: Inserting sample categories...\n";
-    $pdo->exec("INSERT INTO categories (name, description, parent_id)
-        SELECT data.name, data.description, data.parent_id
-        FROM (
-            VALUES
-                ('Electronics', 'Electronic devices and accessories', NULL),
-                ('Computers', 'Laptops, desktops, and computer accessories', 1),
-                ('Mobile Devices', 'Smartphones and tablets', 1),
-                ('Office Supplies', 'General office supplies and stationery', NULL),
-                ('Furniture', 'Office and home furniture', NULL),
-                ('Clothing', 'Apparel and fashion items', NULL)
-        ) AS data(name, description, parent_id)
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM categories c
-            WHERE c.name = data.name
-        )");
-    echo "✓ Sample categories inserted\n";
-    
-    // Insert sample products
-    echo "\nStep 7: Inserting sample products...\n";
-    $pdo->exec("INSERT INTO products (sku, barcode, name, description, category_id, unit_price, cost_price, quantity, reorder_level) VALUES
-        ('ELEC001', '1234567890123', 'Wireless Mouse', 'Ergonomic wireless mouse with USB receiver', 1, 25.99, 15.00, 100, 20),
-        ('ELEC002', '1234567890124', 'USB Keyboard', 'Mechanical USB keyboard with RGB lighting', 1, 45.99, 28.00, 75, 15),
-        ('COMP001', '1234567890125', 'Laptop Stand', 'Adjustable aluminum laptop stand', 2, 35.99, 20.00, 50, 10),
-        ('COMP002', '1234567890126', 'External HDD 1TB', 'Portable external hard drive 1TB USB 3.0', 2, 59.99, 40.00, 30, 10),
-        ('MOBI001', '1234567890127', 'Phone Charger', 'Fast charging USB-C charger 20W', 3, 19.99, 10.00, 200, 50),
-        ('OFFI001', '1234567890128', 'Ballpoint Pens (Box)', 'Box of 50 blue ballpoint pens', 4, 12.99, 6.00, 150, 30),
-        ('FURN001', '1234567890129', 'Office Chair', 'Ergonomic office chair with lumbar support', 5, 149.99, 90.00, 25, 5),
-        ('CLTH001', '1234567890130', 'T-Shirt (Cotton)', '100% cotton regular fit t-shirt - Black M', 6, 15.99, 8.00, 100, 25)
-    ON CONFLICT (sku) DO NOTHING");
-    echo "✓ Sample products inserted\n";
-    
-    // Insert stock logs
-    echo "\nStep 8: Inserting stock logs...\n";
-    $pdo->exec("INSERT INTO stock_logs (
-            product_id, user_id, action, quantity_before, quantity_after, quantity_changed, reference_number, notes
-        )
-        SELECT
-            data.product_id,
-            data.user_id,
-            data.action,
-            data.quantity_before,
-            data.quantity_after,
-            data.quantity_changed,
-            data.reference_number,
-            data.notes
-        FROM (
-            VALUES
-                (1, 1, 'add', 0, 100, 100, 'INIT001', 'Initial stock'),
-                (2, 1, 'add', 0, 75, 75, 'INIT002', 'Initial stock'),
-                (3, 1, 'add', 0, 50, 50, 'INIT003', 'Initial stock'),
-                (4, 1, 'add', 0, 30, 30, 'INIT004', 'Initial stock'),
-                (5, 1, 'add', 0, 200, 200, 'INIT005', 'Initial stock'),
-                (6, 1, 'add', 0, 150, 150, 'INIT006', 'Initial stock'),
-                (7, 1, 'add', 0, 25, 25, 'INIT007', 'Initial stock'),
-                (8, 1, 'add', 0, 100, 100, 'INIT008', 'Initial stock')
-        ) AS data(product_id, user_id, action, quantity_before, quantity_after, quantity_changed, reference_number, notes)
-        WHERE NOT EXISTS (
-            SELECT 1
-            FROM stock_logs s
-            WHERE s.reference_number = data.reference_number
-        )");
-    echo "✓ Stock logs inserted\n";
-    
-    // Verify tables
-    echo "\n========================================\n";
-    echo "Verifying database tables...\n";
-    $tables = $pdo->query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name")->fetchAll(PDO::FETCH_COLUMN);
-    
-    foreach ($tables as $table) {
-        echo "  ✓ $table\n";
-    }
-    
-    // Check admin user
-    echo "\n========================================\n";
-    echo "Checking admin user...\n";
-    $stmt = $pdo->query("SELECT username, email, role FROM users WHERE username = 'admin'");
-    $admin = $stmt->fetch();
-    
-    if ($admin) {
-        echo "  ✓ Admin user: {$admin['username']} ({$admin['role']})\n";
-        echo "  ✓ Email: {$admin['email']}\n";
-        echo "  ✓ Password: admin123\n";
-    }
-    
-    echo "\n========================================\n";
-    echo "✓ Database setup completed successfully!\n";
-    echo "========================================\n";
-    echo "\nYou can now login at:\n";
-    echo "  <a href='http://localhost/inventory-system/login.php' target='_blank'>http://localhost/inventory-system/login.php</a>\n";
-    echo "\nLogin credentials:\n";
+
+    // ── ADMIN USER in users table (for main app login)
+    echo "\nStep 3: Creating admin user...\n";
+    $passwordHash = password_hash('admin123', PASSWORD_DEFAULT);
+    $pdo->prepare("INSERT INTO users (
+            username, password, email, full_name, role,
+            is_active, is_verified, account_status
+        ) VALUES (
+            'admin', ?, 'admin@inventorysystem.com',
+            'System Administrator', 'admin',
+            true, true, 'active'
+        ) ON CONFLICT (username) DO UPDATE SET
+            is_verified    = true,
+            is_active      = true,
+            account_status = 'active',
+            password       = EXCLUDED.password"
+    )->execute([$passwordHash]);
+    echo "✓ Admin user created in users table\n";
+
+    // ── ADMIN USER in admin_users table (for admin panel login)
+    $adminHash = password_hash('admin123', PASSWORD_DEFAULT);
+    $pdo->prepare("INSERT INTO admin_users (username, password_hash, email, role)
+        VALUES ('admin', ?, 'admin@inventorysystem.com', 'admin')
+        ON CONFLICT (username) DO UPDATE SET
+            password_hash = EXCLUDED.password_hash"
+    )->execute([$adminHash]);
+    echo "✓ Admin user created in admin_users table\n";
     echo "  Username: admin\n";
     echo "  Password: admin123\n";
-    echo "\n";
-    echo "<strong>IMPORTANT: Delete this file (setup.php) after setup for security!</strong>\n";
-    
+
+    // ── SAMPLE CATEGORIES
+    echo "\nStep 4: Inserting sample categories...\n";
+    $pdo->exec("INSERT INTO categories (name, description, parent_id)
+        SELECT v.name, v.description, v.parent_id::INTEGER
+        FROM (VALUES
+            ('Electronics',   'Electronic devices and accessories', NULL),
+            ('Computers',     'Laptops and accessories',            '1'),
+            ('Mobile Devices','Smartphones and tablets',            '1'),
+            ('Office Supplies','General office supplies',           NULL),
+            ('Furniture',     'Office and home furniture',          NULL),
+            ('Clothing',      'Apparel and fashion items',          NULL)
+        ) AS v(name, description, parent_id)
+        WHERE NOT EXISTS (
+            SELECT 1 FROM categories c WHERE c.name = v.name
+        )");
+    echo "✓ Sample categories inserted\n";
+
+    // ── SAMPLE PRODUCTS
+    echo "\nStep 5: Inserting sample products...\n";
+    $pdo->exec("INSERT INTO products
+        (sku, barcode, name, description, category_id,
+         unit_price, cost_price, quantity, reorder_level)
+        VALUES
+        ('ELEC001','1234567890123','Wireless Mouse',
+         'Ergonomic wireless mouse',1,25.99,15.00,100,20),
+        ('ELEC002','1234567890124','USB Keyboard',
+         'Mechanical RGB keyboard',1,45.99,28.00,75,15),
+        ('COMP001','1234567890125','Laptop Stand',
+         'Adjustable aluminum stand',2,35.99,20.00,50,10),
+        ('MOBI001','1234567890127','Phone Charger',
+         'Fast charging USB-C 20W',3,19.99,10.00,200,50),
+        ('OFFI001','1234567890128','Ballpoint Pens (Box)',
+         'Box of 50 blue pens',4,12.99,6.00,150,30),
+        ('FURN001','1234567890129','Office Chair',
+         'Ergonomic lumbar support',5,149.99,90.00,25,5),
+        ('CLTH001','1234567890130','T-Shirt (Cotton)',
+         '100% cotton Black M',6,15.99,8.00,100,25)
+        ON CONFLICT (sku) DO NOTHING");
+    echo "✓ Sample products inserted\n";
+
+    // ── DEFAULT SETTINGS
+    echo "\nStep 6: Inserting default settings...\n";
+    $settings = [
+        ['store_name',          'Inventory System'],
+        ['store_email',         'admin@inventorysystem.com'],
+        ['currency',            'USD'],
+        ['timezone',            'Africa/Nairobi'],
+        ['low_stock_threshold', '5'],
+    ];
+    $stmt = $pdo->prepare("INSERT INTO app_settings (setting_key, setting_value)
+        VALUES (?, ?) ON CONFLICT (setting_key) DO NOTHING");
+    foreach ($settings as $s) {
+        $stmt->execute($s);
+    }
+    echo "✓ Default settings inserted\n";
+
+    // ── VERIFY ALL TABLES
+    echo "\n========================================\n";
+    echo "Tables in database:\n";
+    $tables = $pdo->query("SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        ORDER BY table_name")
+        ->fetchAll(PDO::FETCH_COLUMN);
+    foreach ($tables as $t) {
+        echo "  ✓ $t\n";
+    }
+
+    echo "\n========================================\n";
+    echo "✓ DATABASE SETUP COMPLETED SUCCESSFULLY!\n";
+    echo "========================================\n\n";
+    echo "Admin login:  <a href='/login.php'>/login.php</a>\n";
+    echo "  Username:   admin\n";
+    echo "  Password:   admin123\n\n";
+    echo "<strong style='color:red;font-size:16px;'>";
+    echo "⚠ DELETE THIS FILE FROM GITHUB IMMEDIATELY AFTER USE!";
+    echo "</strong>\n";
+
 } catch (PDOException $e) {
-    echo "✗ Database setup failed!\n";
-    echo "========================================\n";
-    echo "Error: " . $e->getMessage() . "\n";
-    echo "\nTroubleshooting:\n";
-    echo "  1. Make sure PostgreSQL is running\n";
-    echo "  2. Check if username '$username' is correct\n";
-    echo "  3. Check if password '$password' is correct\n";
-    echo "  4. Verify PostgreSQL is accepting connections on port $port\n";
+    echo "✗ Setup FAILED!\n";
+    echo "Error: " . $e->getMessage() . "\n\n";
+    echo "Checklist:\n";
+    echo "  1. Is DATABASE_URL set in Render environment variables?\n";
+    echo "  2. Is your PostgreSQL service running on Render?\n";
+    echo "  3. Are both services in the same Render region?\n";
 }
 
 echo "</pre>";

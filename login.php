@@ -12,6 +12,7 @@ session_start();
 // Include database connection
 require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/includes/account_verification_helper.php';
+require_once __DIR__ . '/includes/logger.php';
 
 /**
  * Escape output for safe HTML rendering.
@@ -50,12 +51,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $password = $_POST['password'] ?? '';
     $submittedLogin = $login;
 
+    // Log login attempt (do not log passwords)
+    Logger::info('Login attempt received', ['login' => $login, 'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown']);
+
     // Validate input
     if (empty($login) || empty($password)) {
         $error = 'Please enter both your email or username and password.';
     } elseif (!($pdo instanceof PDO)) {
         // Database connection is not available
         $error = $db_connection_error ?: 'Database connection is unavailable. Please try again later.';
+        Logger::error('Database connection unavailable during login', ['error' => $db_connection_error ?? 'unknown']);
     } else {
         try {
             ensureUsersRegistrationSchema($pdo);
@@ -78,10 +83,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($user && password_verify($password, $user['password'])) {
                 if (($user['account_status'] ?? 'active') === 'suspended') {
                     $error = 'Your account is suspended. Please contact support.';
-                } elseif (empty($user['is_verified']) || ($user['account_status'] ?? 'pending') === 'pending') {
+                    Logger::warn('Login blocked - account suspended', ['login' => $login, 'user_id' => $user['id']]);
+                } elseif (!isAccountVerified($user['is_verified']) || ($user['account_status'] ?? 'pending') === 'pending') {
                     session_regenerate_id(true);
                     setPendingVerificationSession($user);
                     $_SESSION['flash_success'] = 'Your account is not verified yet. Enter the 6-digit code we sent to your email.';
+                    Logger::info('Login requires verification', ['login' => $login, 'user_id' => $user['id']]);
                     header('Location: verify_code.php');
                     exit;
                 } else {
@@ -100,6 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Update last login time (optional)
                     $updateStmt = $pdo->prepare('UPDATE users SET updated_at = CURRENT_TIMESTAMP WHERE id = :id');
                     $updateStmt->execute(['id' => $user['id']]);
+                    Logger::info('Login successful', ['login' => $login, 'user_id' => $user['id'], 'role' => $user['role']]);
                     
                     // Redirect based on user role
                     $user_role = $user['role'];
@@ -116,14 +124,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } else {
                 // Invalid credentials
                 $error = 'Invalid email, username, or password.';
-                
-                // Log failed login attempt (optional)
-                error_log("Failed login attempt for login: " . $login);
+                Logger::warn('Invalid login credentials', ['login' => $login, 'ip' => $_SERVER['REMOTE_ADDR'] ?? 'unknown']);
             }
             
         } catch (PDOException $e) {
             // Log database error
-            error_log("Login error: " . $e->getMessage());
+            Logger::error('Login PDOException', ['message' => $e->getMessage()]);
             $error = 'An error occurred. Please try again later.';
         }
     }
