@@ -16,8 +16,8 @@ if (!function_exists('ensureUsersRegistrationSchema')) {
                 customer_group VARCHAR(50) NOT NULL DEFAULT 'regular',
                 role VARCHAR(20) NOT NULL DEFAULT 'customer',
                 is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                is_verified BOOLEAN NOT NULL DEFAULT TRUE,
-                account_status VARCHAR(20) NOT NULL DEFAULT 'active',
+                is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+                account_status VARCHAR(20) NOT NULL DEFAULT 'pending',
                 verification_code VARCHAR(255),
                 code_expiry TIMESTAMP NULL,
                 verification_failed_attempts INT NOT NULL DEFAULT 0,
@@ -36,7 +36,7 @@ if (!function_exists('ensureUsersRegistrationSchema')) {
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS customer_group VARCHAR(50) DEFAULT 'regular'");
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'customer'");
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE");
-        $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT TRUE");
+        $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE");
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS account_status VARCHAR(20) DEFAULT 'active'");
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS verification_code VARCHAR(255)");
         $pdo->exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS code_expiry TIMESTAMP NULL");
@@ -56,8 +56,8 @@ if (!function_exists('ensureUsersRegistrationSchema')) {
                 is_active = COALESCE(is_active, TRUE),
                 created_at = COALESCE(created_at, CURRENT_TIMESTAMP),
                 updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP),
-                is_verified = COALESCE(is_verified, TRUE),
-                account_status = COALESCE(NULLIF(account_status, ''), CASE WHEN COALESCE(is_active, TRUE) = TRUE THEN 'active' ELSE 'suspended' END),
+                is_verified = COALESCE(is_verified, FALSE),
+                account_status = COALESCE(NULLIF(account_status, ''), CASE WHEN COALESCE(is_verified, FALSE) = TRUE THEN 'active' ELSE 'pending' END),
                 verification_failed_attempts = COALESCE(verification_failed_attempts, 0),
                 verification_resend_count = COALESCE(verification_resend_count, 0)
         ");
@@ -408,5 +408,34 @@ if (!function_exists('attemptAccountVerification')) {
             error_log('Account verification update error: ' . $e->getMessage());
             return ['success' => false, 'message' => 'We could not verify your account right now. Please try again later.'];
         }
+    }
+}
+
+if (!function_exists('isAccountVerified')) {
+    /**
+     * Normalize various truthy/falsey representations for the `is_verified` field.
+     *
+     * @param mixed $value
+     * @return bool
+     */
+    function isAccountVerified($value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_null($value)) {
+            return false;
+        }
+
+        // Handle numeric and string representations
+        $val = (string) $value;
+        $valLower = strtolower(trim($val));
+
+        if ($valLower === '1' || $valLower === 'true' || $valLower === 't' || $valLower === 'yes' || $valLower === 'y') {
+            return true;
+        }
+
+        return false;
     }
 }
